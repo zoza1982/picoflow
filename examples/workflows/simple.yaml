@@ -10,19 +10,22 @@ tasks:
   - name: task_a
     type: shell
     config:
-      command: "echo 'Task A started' && sleep 1 && echo 'Task A completed'"
+      command: "/bin/echo"
+      args: ["Task A completed"]
     timeout: 10
 
   - name: task_b
     type: shell
     depends_on: [task_a]
     config:
-      command: "echo 'Task B started' && sleep 1 && echo 'Task B completed'"
+      command: "/bin/echo"
+      args: ["Task B completed"]
     timeout: 10
 
   - name: task_c
     type: shell
     depends_on: [task_b]
     config:
-      command: "echo 'Task C started' && sleep 1 && echo 'Task C completed'"
+      command: "/bin/echo"
+      args: ["Task C completed"]
     timeout: 10
