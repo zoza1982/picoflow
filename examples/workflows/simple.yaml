@@ -10,22 +10,22 @@ tasks:
   - name: task_a
     type: shell
     config:
-      command: "/bin/echo"
-      args: ["Task A completed"]
+      command: "/sbin/ping"
+      args: ["-c", "1", "google.com"]
     timeout: 10
 
   - name: task_b
     type: shell
     depends_on: [task_a]
     config:
-      command: "/bin/echo"
-      args: ["Task B completed"]
+      command: "/sbin/ping"
+      args: ["-c", "1", "cloudflare.com"]
     timeout: 10
 
   - name: task_c
     type: shell
     depends_on: [task_b]
     config:
-      command: "/bin/echo"
-      args: ["Task C completed"]
+      command: "/sbin/ping"
+      args: ["-c", "1", "yahoo.com"]
     timeout: 10
