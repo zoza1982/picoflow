@@ -1,0 +1,43 @@
+name: parallel-workflow
+description: "Workflow with parallel task execution"
+
+config:
+  max_parallel: 4
+  retry_default: 2
+  timeout_default: 120
+
+tasks:
+  - name: init
+    type: shell
+    config:
+      command: "echo 'Starting parallel workflow'"
+
+  - name: task_1a
+    type: shell
+    depends_on: [init]
+    config:
+      command: "echo 'Parallel task 1A' && sleep 2"
+
+  - name: task_1b
+    type: shell
+    depends_on: [init]
+    config:
+      command: "echo 'Parallel task 1B' && sleep 2"
+
+  - name: task_1c
+    type: shell
+    depends_on: [init]
+    config:
+      command: "echo 'Parallel task 1C' && sleep 2"
+
+  - name: task_1d
+    type: shell
+    depends_on: [init]
+    config:
+      command: "echo 'Parallel task 1D' && sleep 2"
+
+  - name: finalize
+    type: shell
+    depends_on: [task_1a, task_1b, task_1c, task_1d]
+    config:
+      command: "echo 'All parallel tasks completed'"

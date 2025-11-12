@@ -1,0 +1,38 @@
+# Rust
+/target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+/.tarpaulin/
+/coverage/
+
+# Benchmarks
+/benches/target/
+
+# Logs
+*.log
+
+# Local development
+.env
+.env.local
+*.db
+*.db-shm
+*.db-wal
+
+# Example workflows (for local testing)
+/examples/workflows/local/
+
+# Profiling
+flamegraph.svg
+perf.data
+perf.data.old

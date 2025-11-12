@@ -1,0 +1,14 @@
+# Clippy linting configuration for PicoFlow
+
+# Deny all warnings in CI
+warn-on-all-wildcard-imports = true
+
+# Performance
+too-many-arguments-threshold = 7
+type-complexity-threshold = 250
+
+# Style
+single-char-binding-names-threshold = 4
+
+# Cognitive complexity
+cognitive-complexity-threshold = 30

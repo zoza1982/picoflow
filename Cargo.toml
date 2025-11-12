@@ -1,0 +1,61 @@
+[package]
+name = "picoflow"
+version = "0.1.0"
+edition = "2021"
+authors = ["Zoran Vukmirica <zoza1982@users.noreply.github.com>"]
+description = "Lightweight DAG workflow orchestrator for edge devices"
+license = "MIT"
+repository = "https://github.com/zoza1982/picoflow"
+keywords = ["workflow", "dag", "scheduler", "edge", "orchestrator"]
+categories = ["command-line-utilities", "development-tools"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# DAG & scheduling
+petgraph = "0.6"
+tokio-cron-scheduler = "0.9"
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+config = "0.14"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Storage
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Executors
+ssh2 = "0.9"
+reqwest = { version = "0.11", features = ["json"] }
+
+# Logging & metrics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json"] }
+prometheus = "0.13"
+
+# Utilities
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tempfile = "3"
+mockall = "0.12"
+criterion = "0.5"
+
+[[bench]]
+name = "dag_benchmark"
+harness = false
+
+[profile.release]
+opt-level = "z"     # Optimize for size
+lto = true          # Enable link-time optimization
+codegen-units = 1   # Maximize optimizations
+strip = true        # Strip symbols for smaller binary
+panic = "abort"     # Reduce binary size further

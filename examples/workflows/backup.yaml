@@ -1,0 +1,42 @@
+name: backup-workflow
+description: "Daily database backup with health check"
+schedule: "0 2 * * *"
+
+config:
+  max_parallel: 4
+  retry_default: 3
+  timeout_default: 300
+
+tasks:
+  - name: health_check
+    type: http
+    config:
+      url: "https://api.server.com/health"
+      method: GET
+      timeout: 10
+    retry: 2
+
+  - name: backup_database
+    type: ssh
+    depends_on: [health_check]
+    config:
+      host: "db.server.com"
+      command: "pg_dump mydb | gzip > /backup/db.sql.gz"
+      user: backup
+    retry: 3
+    timeout: 600
+
+  - name: verify_backup
+    type: shell
+    depends_on: [backup_database]
+    config:
+      command: "ssh backup@db.server.com 'test -f /backup/db.sql.gz'"
+    retry: 1
+
+  - name: cleanup_old_backups
+    type: ssh
+    depends_on: [verify_backup]
+    config:
+      host: "db.server.com"
+      command: "find /backup -mtime +7 -delete"
+    continue_on_failure: true

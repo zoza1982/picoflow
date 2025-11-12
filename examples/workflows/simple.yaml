@@ -1,0 +1,28 @@
+name: simple-workflow
+description: "Simple 3-task sequential workflow for testing"
+
+config:
+  max_parallel: 1
+  retry_default: 2
+  timeout_default: 60
+
+tasks:
+  - name: task_a
+    type: shell
+    config:
+      command: "echo 'Task A started' && sleep 1 && echo 'Task A completed'"
+    timeout: 10
+
+  - name: task_b
+    type: shell
+    depends_on: [task_a]
+    config:
+      command: "echo 'Task B started' && sleep 1 && echo 'Task B completed'"
+    timeout: 10
+
+  - name: task_c
+    type: shell
+    depends_on: [task_b]
+    config:
+      command: "echo 'Task C started' && sleep 1 && echo 'Task C completed'"
+    timeout: 10
