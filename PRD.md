@@ -566,10 +566,58 @@ Acceptance Criteria:
 - [ ] Release v1.0
 
 ### Future (Post-v1.0)
-- **v1.1:** Docker executor, web UI
-- **v1.2:** Conditional execution, dynamic DAGs
-- **v2.0:** Distributed execution, HA deployment
-- **v2.1:** Python/JS task definitions via plugins
+
+#### Phase 5: Docker & Web UI (v1.1)
+**Duration:** 4 weeks
+**Goals:**
+- Docker executor for containerized task execution
+- Read-only Web UI for workflow visualization and monitoring
+- Enhanced workflow parameterization
+- Task data passing via JSON
+
+**Key Features:**
+- Docker container execution (bollard crate integration)
+- Lightweight Web UI on port 8080 (optional, disabled by default)
+- DAG visualization with SVG/Canvas rendering
+- Live execution status and history browser
+- Memory target: <5MB additional overhead for UI
+- Binary size target: <15MB (acceptable for optional features)
+
+#### Phase 6: Advanced Workflows (v1.2)
+**Duration:** 6 weeks
+**Goals:**
+- Conditional task execution based on results
+- Dynamic DAG generation at runtime
+- Rich data passing between tasks
+- Template-based workflow generation
+
+**Key Features:**
+- Branching logic and task conditions
+- Loop constructs for task repetition
+- Built-in templating engine (Tera/Handlebars)
+- Output artifacts and caching
+
+#### Phase 7: Distributed Execution (v2.0)
+**Duration:** 12 weeks
+**Goals:**
+- Multi-node distributed workflow execution
+- High availability and fault tolerance
+- Linear scalability across nodes
+
+**Key Features:**
+- Leader/worker node architecture
+- gRPC inter-node communication
+- Raft consensus for leader election
+- Optional PostgreSQL backend for shared state
+- Distributed task queue
+- Node health monitoring and failover
+
+#### Phase 8: Plugin System (v2.1+)
+**Future considerations:**
+- Python/JS task definitions via plugins
+- Custom executor plugins
+- Workflow hooks and callbacks
+- Integration marketplace
 
 ---
 
@@ -641,9 +689,11 @@ Acceptance Criteria:
 | DAG support | ✅ | ✅ | ✅ | ⚠️ | ❌ |
 | Parallel execution | ✅ | ✅ | ✅ | ⚠️ | ❌ |
 | Retry logic | ✅ | ✅ | ✅ | ⚠️ | ❌ |
-| Web UI | v1.1 | ✅ | ✅ | ❌ | ❌ |
+| Prometheus metrics | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Web UI | v1.1 (planned) | ✅ | ✅ | ❌ | ❌ |
 | Python-free | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Edge device ready | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Docker executor | v1.1 (planned) | ✅ | ✅ | ⚠️ | ❌ |
 
 ### B. Sample Benchmarks (Target)
 

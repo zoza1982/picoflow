@@ -573,6 +573,115 @@ picoflow status --workflow simple-workflow
 
 ---
 
+## Post-v1.0 Roadmap
+
+### Phase 5: Docker & Web UI (v1.1) - Future
+
+**Goal:** Enhanced executor capabilities and optional monitoring UI
+
+**Estimated Duration:** 4 weeks
+
+### Tasks
+
+- [ ] Docker executor (`src/executors/docker.rs`)
+  - [ ] Execute commands inside Docker containers
+  - [ ] Support docker run, docker exec
+  - [ ] Volume mounting configuration
+  - [ ] Network configuration
+  - [ ] Container cleanup after execution
+  - [ ] Integration with Docker API (bollard crate)
+  - [ ] Unit tests with mock Docker daemon
+
+- [ ] Read-only Web UI (`src/webui/`)
+  - [ ] Lightweight HTTP server (axum or actix-web)
+  - [ ] DAG visualization (SVG/Canvas rendering)
+  - [ ] Execution history browser
+  - [ ] Live workflow status view
+  - [ ] Task log viewer
+  - [ ] Read-only design (no editing/triggering)
+  - [ ] Optional/disabled by default
+  - [ ] Target: <5MB additional memory overhead
+  - [ ] Static asset embedding (no external files)
+
+- [ ] Enhanced features
+  - [ ] Task data passing via JSON files
+  - [ ] Workflow parameterization at runtime
+  - [ ] Environment variable templating
+  - [ ] Conditional task execution (basic)
+
+**Exit Criteria:**
+- [ ] Docker executor works with common use cases
+- [ ] Web UI accessible on configurable port (default: 8080)
+- [ ] UI memory overhead <5MB
+- [ ] Documentation for Docker tasks and Web UI
+- [ ] All tests passing
+- [ ] Binary size <15MB (acceptable growth for optional features)
+
+---
+
+### Phase 6: Advanced Workflows (v1.2) - Future
+
+**Goal:** Dynamic DAGs and conditional execution
+
+**Estimated Duration:** 6 weeks
+
+### Tasks
+
+- [ ] Conditional execution
+  - [ ] Task conditions based on previous task results
+  - [ ] Skip tasks based on conditions
+  - [ ] Branching logic in workflows
+
+- [ ] Dynamic DAGs
+  - [ ] Generate tasks at runtime based on data
+  - [ ] Loop constructs for task repetition
+  - [ ] Template-based task generation
+
+- [ ] Enhanced data passing
+  - [ ] Rich JSON data between tasks
+  - [ ] Built-in templating engine (Tera or Handlebars)
+  - [ ] Output artifacts and caching
+
+**Exit Criteria:**
+- [ ] Conditional workflows work correctly
+- [ ] Dynamic task generation functional
+- [ ] Performance targets still met
+- [ ] Comprehensive examples
+
+---
+
+### Phase 7: Distributed Execution (v2.0) - Future
+
+**Goal:** Multi-node distributed workflow execution
+
+**Estimated Duration:** 12 weeks
+
+### Tasks
+
+- [ ] Distributed architecture
+  - [ ] Leader/worker node model
+  - [ ] gRPC communication between nodes
+  - [ ] Work distribution algorithm
+  - [ ] Node health monitoring
+
+- [ ] High availability
+  - [ ] Leader election (Raft consensus)
+  - [ ] State replication
+  - [ ] Failover handling
+
+- [ ] Enhanced storage
+  - [ ] Optional PostgreSQL backend
+  - [ ] Distributed task queue
+  - [ ] Artifact storage system
+
+**Exit Criteria:**
+- [ ] Can distribute tasks across 3+ nodes
+- [ ] Leader failover works correctly
+- [ ] Performance scales linearly
+- [ ] Documentation for distributed setup
+
+---
+
 **Document Status:** Active
 **Current Phase:** Phase 3 (Parallelism & Observability) - Complete ✅
 **Next Phase:** Phase 4 (Polish & Documentation)
