@@ -1,0 +1,46 @@
+name: scheduled-health-check
+description: "Scheduled health check workflow with cron schedule"
+schedule: "0 */5 * * * *"  # Every 5 minutes (6-field format: sec min hour day month dayofweek)
+
+config:
+  max_parallel: 2
+  retry_default: 2
+  timeout_default: 30
+
+tasks:
+  - name: check_disk_space
+    type: shell
+    config:
+      command: "/bin/df"
+      args:
+        - "-h"
+        - "/"
+    retry: 1
+    timeout: 10
+
+  - name: check_memory
+    type: shell
+    depends_on:
+      - check_disk_space
+    config:
+      command: "/usr/bin/top"
+      args:
+        - "-l"
+        - "1"
+        - "-s"
+        - "0"
+        - "-stats"
+        - "pid,command,cpu,mem"
+    retry: 1
+    timeout: 10
+
+  - name: echo_status
+    type: shell
+    depends_on:
+      - check_memory
+    config:
+      command: "/bin/echo"
+      args:
+        - "Health check completed at $(date)"
+    retry: 0
+    timeout: 5

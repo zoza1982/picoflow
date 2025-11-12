@@ -62,12 +62,45 @@ pub enum Commands {
         #[command(subcommand)]
         command: WorkflowCommands,
     },
+
+    /// Daemon management commands
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommands,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum WorkflowCommands {
     /// List all workflows with execution statistics
     List,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DaemonCommands {
+    /// Start daemon in background with scheduled workflows
+    Start {
+        /// Path to workflow YAML file (must have schedule defined)
+        workflow: PathBuf,
+
+        /// Path to PID file
+        #[arg(long, default_value = "/tmp/picoflow.pid")]
+        pid_file: PathBuf,
+    },
+
+    /// Stop running daemon
+    Stop {
+        /// Path to PID file
+        #[arg(long, default_value = "/tmp/picoflow.pid")]
+        pid_file: PathBuf,
+    },
+
+    /// Check daemon status
+    Status {
+        /// Path to PID file
+        #[arg(long, default_value = "/tmp/picoflow.pid")]
+        pid_file: PathBuf,
+    },
 }
 
 impl Cli {
@@ -101,6 +134,9 @@ impl Cli {
             }
             Commands::Workflow { command } => {
                 self.handle_workflow_command(command)?;
+            }
+            Commands::Daemon { command } => {
+                self.handle_daemon_command(command).await?;
             }
         }
         Ok(())
@@ -254,6 +290,83 @@ impl Cli {
                 workflow.failed_count,
                 last_exec
             );
+        }
+
+        Ok(())
+    }
+
+    /// Handle daemon management commands
+    async fn handle_daemon_command(&self, command: &DaemonCommands) -> anyhow::Result<()> {
+        use crate::daemon::{check_daemon_running, stop_daemon, Daemon};
+
+        match command {
+            DaemonCommands::Start { workflow, pid_file } => {
+                info!("Starting daemon with workflow: {:?}", workflow);
+
+                // Parse workflow
+                let config = parse_workflow_file(workflow)?;
+
+                // Validate workflow has a schedule
+                if config.schedule.is_none() {
+                    error!("Workflow '{}' has no schedule defined", config.name);
+                    return Err(anyhow::anyhow!(
+                        "Cannot start daemon with workflow '{}': no schedule defined. \
+                         Add a 'schedule' field with a cron expression.",
+                        config.name
+                    ));
+                }
+
+                info!(
+                    "Workflow '{}' loaded with schedule: {}",
+                    config.name,
+                    config.schedule.as_ref().unwrap()
+                );
+
+                // Create state manager
+                let state_manager = Arc::new(StateManager::new(&self.db_path)?);
+
+                // Create daemon
+                let mut daemon = Daemon::new(state_manager, pid_file.clone()).await?;
+
+                // Add workflow
+                daemon.add_workflow(config).await?;
+
+                println!("Starting PicoFlow daemon (PID file: {:?})", pid_file);
+                println!("Press Ctrl+C to stop");
+
+                // Run daemon (blocks until signal)
+                daemon.run().await?;
+
+                println!("Daemon stopped");
+            }
+
+            DaemonCommands::Stop { pid_file } => {
+                info!("Stopping daemon (PID file: {:?})", pid_file);
+
+                match check_daemon_running(pid_file)? {
+                    Some(pid) => {
+                        println!("Stopping daemon (PID: {})", pid);
+                        stop_daemon(pid_file)?;
+                        println!("Daemon stopped");
+                    }
+                    None => {
+                        println!("Daemon is not running");
+                    }
+                }
+            }
+
+            DaemonCommands::Status { pid_file } => {
+                info!("Checking daemon status (PID file: {:?})", pid_file);
+
+                match check_daemon_running(pid_file)? {
+                    Some(pid) => {
+                        println!("Daemon is running (PID: {})", pid);
+                    }
+                    None => {
+                        println!("Daemon is not running");
+                    }
+                }
+            }
         }
 
         Ok(())

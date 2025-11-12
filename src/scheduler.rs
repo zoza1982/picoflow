@@ -3,6 +3,7 @@
 use crate::dag::DagEngine;
 use crate::error::Result;
 use crate::executors::shell::ShellExecutor;
+use crate::executors::ssh::SshExecutor;
 use crate::executors::ExecutorTrait;
 use crate::models::{TaskConfig, TaskStatus, WorkflowConfig};
 use crate::state::StateManager;
@@ -14,6 +15,7 @@ use tracing::{error, info, warn};
 pub struct TaskScheduler {
     state_manager: Arc<StateManager>,
     shell_executor: ShellExecutor,
+    ssh_executor: SshExecutor,
 }
 
 impl TaskScheduler {
@@ -22,6 +24,7 @@ impl TaskScheduler {
         Self {
             state_manager,
             shell_executor: ShellExecutor::new(),
+            ssh_executor: SshExecutor::new(),
         }
     }
 
@@ -207,9 +210,7 @@ impl TaskScheduler {
         let task_future = async {
             match task.task_type {
                 crate::models::TaskType::Shell => self.shell_executor.execute(&task.config).await,
-                crate::models::TaskType::Ssh => {
-                    Err(anyhow::anyhow!("SSH executor not yet implemented"))
-                }
+                crate::models::TaskType::Ssh => self.ssh_executor.execute(&task.config).await,
                 crate::models::TaskType::Http => {
                     Err(anyhow::anyhow!("HTTP executor not yet implemented"))
                 }

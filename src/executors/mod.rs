@@ -1,6 +1,7 @@
 //! Task executors
 
 pub mod shell;
+pub mod ssh;
 
 use crate::models::{ExecutionResult, TaskExecutorConfig};
 use async_trait::async_trait;

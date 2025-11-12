@@ -69,8 +69,16 @@ pub enum PicoFlowError {
     OutputSizeExceeded { limit: usize },
 
     /// SSH errors
-    #[error("SSH error: {0}")]
-    Ssh(String),
+    #[error("SSH error on {host}: {message}")]
+    Ssh { host: String, message: String },
+
+    /// Validation errors
+    #[error("Validation error: {0}")]
+    Validation(String),
+
+    /// Execution errors
+    #[error("Execution error: {0}")]
+    Execution(String),
 
     /// HTTP errors
     #[error("HTTP error: {0}")]

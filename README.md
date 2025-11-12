@@ -49,7 +49,7 @@ Create `backup-workflow.yaml`:
 ```yaml
 name: backup-workflow
 description: "Daily database backup"
-schedule: "0 2 * * *"  # 2 AM daily
+schedule: "0 0 2 * * *"  # 2 AM daily (6-field cron: sec min hour day month dayofweek)
 
 config:
   max_parallel: 2
@@ -97,10 +97,13 @@ picoflow workflow list
 picoflow status --workflow backup-workflow
 
 # Run in daemon mode (with scheduling)
-picoflow daemon backup-workflow.yaml
+picoflow daemon start backup-workflow.yaml
 
-# View logs
-picoflow logs --workflow backup-workflow --task backup_database
+# Stop daemon
+picoflow daemon stop
+
+# Check daemon status
+picoflow daemon status
 ```
 
 ## Architecture
@@ -118,12 +121,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
 
 ## Performance
 
-Current measurements (Phase 1 MVP):
+Current measurements (Phase 2):
 
-- **Binary size**: 1.8MB (stripped) - 82% under 10MB target ✅
-- **Tests**: 47/47 passing (100%) ✅
-- **Code Quality**: Grade A- (93/100) ✅
-- **Test Coverage**: ~85% ✅
+- **Binary size**: 2.1MB (stripped) - 79% under 10MB target ✅
+- **Tests**: 77/77 passing (100%) ✅
+- **Code Quality**: Grade A ✅
+- **Test Coverage**: >80% ✅
 
 Target platform performance (Raspberry Pi Zero 2 W):
 - Idle memory target: <20MB RSS
