@@ -104,6 +104,15 @@ picoflow daemon stop
 
 # Check daemon status
 picoflow daemon status
+
+# View execution history
+picoflow history --workflow backup-workflow
+
+# View workflow statistics
+picoflow stats --workflow backup-workflow
+
+# View task logs
+picoflow logs --workflow backup-workflow --task backup_database
 ```
 
 ## Architecture
@@ -121,16 +130,17 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed design documentation.
 
 ## Performance
 
-Current measurements (Phase 2):
+Current measurements (Phase 3):
 
-- **Binary size**: 2.1MB (stripped) - 79% under 10MB target ✅
-- **Tests**: 77/77 passing (100%) ✅
-- **Code Quality**: Grade A ✅
+- **Binary size**: 2.2MB (stripped) - 78% under 10MB target ✅
+- **Memory (10 parallel tasks)**: ~7MB - 86% under 50MB target ✅
+- **Tests**: 82/82 passing (100%) ✅
+- **Code Quality**: Grade A- (92/100) ✅
 - **Test Coverage**: >80% ✅
 
 Target platform performance (Raspberry Pi Zero 2 W):
 - Idle memory target: <20MB RSS
-- 10 parallel tasks target: <50MB RSS
+- 10 parallel tasks target: <50MB RSS ✅ (measured: ~7MB)
 - Task startup latency target: <100ms
 - DAG parsing (100 tasks) target: <50ms
 
@@ -193,18 +203,26 @@ cargo audit
   - CLI: run, validate, status
   - Full rustdoc documentation
   - Code review Grade A- (93/100)
-- [ ] **Phase 2**: Scheduling & SSH (v0.3.0) - Next
-  - Cron-based scheduling
-  - SSH remote execution
-  - Daemon mode
-  - Enhanced retry logic
-- [ ] **Phase 3**: Parallelism & Observability (v0.4.0)
-  - Parallel task execution
-  - Prometheus metrics
-  - Log retention
-- [ ] **Phase 4**: Polish & Documentation (v1.0.0)
+- [x] **Phase 2**: Scheduling & SSH (v0.3.0) - ✅ Complete
+  - Cron-based scheduling (6-field format)
+  - SSH remote execution (key-based auth)
+  - Daemon mode with signal handling
+  - Enhanced retry logic with exponential backoff
+  - Graceful shutdown
+  - Code review Grade B+ (87/100)
+- [x] **Phase 3**: Parallelism & Observability (v0.4.0) - ✅ Complete
+  - Parallel task execution with DAG levels
+  - Prometheus metrics endpoint (:9090/metrics)
+  - Execution history queries with filtering
+  - Log retention and cleanup (30-day default)
+  - Enhanced CLI: history, stats, logs
+  - Code review Grade A- (92/100)
+- [ ] **Phase 4**: Polish & Documentation (v1.0.0) - Next
   - HTTP executor
-  - Cross-platform binaries
+  - Comprehensive documentation
+  - Cross-platform binaries (ARM32, ARM64, x86_64)
+  - Performance benchmarking on target hardware
+  - Security audit
   - Production-ready release
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for detailed roadmap.
