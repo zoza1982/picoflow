@@ -41,7 +41,9 @@ impl TaskScheduler {
         info!("Execution order: {:?}", execution_order);
 
         // Create workflow execution record
-        let workflow_id = self.state_manager.get_or_create_workflow(&config.name)?;
+        let workflow_id = self
+            .state_manager
+            .get_or_create_workflow(&config.name, config.schedule.as_deref())?;
         let execution_id = self.state_manager.start_execution(workflow_id)?;
 
         info!("Created workflow execution record (id: {})", execution_id);
@@ -395,7 +397,7 @@ mod tests {
 
         // Verify both tasks were executed
         let _workflow_id = state_manager
-            .get_or_create_workflow("continue-workflow")
+            .get_or_create_workflow("continue-workflow", None)
             .unwrap();
         let history = state_manager
             .get_execution_history("continue-workflow", 1)

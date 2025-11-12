@@ -219,6 +219,7 @@ pub struct TaskExecution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowSummary {
     pub name: String,
+    pub schedule: Option<String>,
     pub execution_count: i64,
     pub success_count: i64,
     pub failed_count: i64,

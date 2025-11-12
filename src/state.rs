@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::debug;
 
 /// State manager for workflow and task execution tracking using SQLite.
 ///
@@ -121,6 +122,7 @@ impl StateManager {
             CREATE TABLE IF NOT EXISTS workflows (
                 id INTEGER PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
+                schedule TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -163,16 +165,32 @@ impl StateManager {
             ",
         )?;
 
+        // Migration: Add schedule column if it doesn't exist (for existing databases)
+        let has_schedule_column: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('workflows') WHERE name='schedule'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !has_schedule_column {
+            conn.execute("ALTER TABLE workflows ADD COLUMN schedule TEXT", [])?;
+            debug!("Added schedule column to workflows table");
+        }
+
         Ok(())
     }
 
     /// Get or create a workflow by name, returning its database ID.
     ///
-    /// If the workflow already exists, returns its ID. Otherwise creates a new workflow entry.
+    /// If the workflow already exists, updates its schedule. Otherwise creates a new workflow entry.
     ///
     /// # Arguments
     ///
     /// * `name` - Workflow name (from YAML config)
+    /// * `schedule` - Optional cron schedule (None for on-demand workflows)
     ///
     /// # Returns
     ///
@@ -181,7 +199,7 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Sqlite` - If database operation fails
-    pub fn get_or_create_workflow(&self, name: &str) -> Result<i64> {
+    pub fn get_or_create_workflow(&self, name: &str, schedule: Option<&str>) -> Result<i64> {
         let conn = self.lock_conn()?;
 
         // Try to get existing workflow
@@ -194,11 +212,19 @@ impl StateManager {
             .optional()?;
 
         if let Some(id) = existing {
+            // Update schedule if it changed
+            conn.execute(
+                "UPDATE workflows SET schedule = ?1 WHERE id = ?2",
+                params![schedule, id],
+            )?;
             return Ok(id);
         }
 
         // Create new workflow
-        conn.execute("INSERT INTO workflows (name) VALUES (?1)", params![name])?;
+        conn.execute(
+            "INSERT INTO workflows (name, schedule) VALUES (?1, ?2)",
+            params![name, schedule],
+        )?;
 
         Ok(conn.last_insert_rowid())
     }
@@ -529,23 +555,25 @@ impl StateManager {
         let mut stmt = conn.prepare(
             "SELECT
                 w.name,
+                w.schedule,
                 COUNT(e.id) as execution_count,
                 SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
                 SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
                 MAX(e.started_at) as last_execution
              FROM workflows w
              LEFT JOIN executions e ON w.id = e.workflow_id
-             GROUP BY w.id, w.name
+             GROUP BY w.id, w.name, w.schedule
              ORDER BY last_execution DESC NULLS LAST",
         )?;
 
         let rows = stmt.query_map([], |row| {
             Ok(WorkflowSummary {
                 name: row.get(0)?,
-                execution_count: row.get(1)?,
-                success_count: row.get(2)?,
-                failed_count: row.get(3)?,
-                last_execution: row.get(4)?,
+                schedule: row.get(1)?,
+                execution_count: row.get(2)?,
+                success_count: row.get(3)?,
+                failed_count: row.get(4)?,
+                last_execution: row.get(5)?,
             })
         })?;
 
@@ -585,11 +613,11 @@ mod tests {
         let manager = StateManager::in_memory().unwrap();
 
         // Create workflow
-        let workflow_id = manager.get_or_create_workflow("test-workflow").unwrap();
+        let workflow_id = manager.get_or_create_workflow("test-workflow", None).unwrap();
         assert!(workflow_id > 0);
 
         // Get existing workflow
-        let workflow_id2 = manager.get_or_create_workflow("test-workflow").unwrap();
+        let workflow_id2 = manager.get_or_create_workflow("test-workflow", None).unwrap();
         assert_eq!(workflow_id, workflow_id2);
     }
 
@@ -597,7 +625,7 @@ mod tests {
     fn test_execution_lifecycle() {
         let manager = StateManager::in_memory().unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test").unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
         let execution_id = manager.start_execution(workflow_id).unwrap();
 
         // Check execution status
@@ -619,7 +647,7 @@ mod tests {
     fn test_task_execution() {
         let manager = StateManager::in_memory().unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test").unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
         let execution_id = manager.start_execution(workflow_id).unwrap();
 
         // Start task
@@ -649,7 +677,7 @@ mod tests {
     fn test_task_retry() {
         let manager = StateManager::in_memory().unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test").unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
         let execution_id = manager.start_execution(workflow_id).unwrap();
         let task_id = manager.start_task(execution_id, "task1", 1).unwrap();
 
@@ -667,7 +695,7 @@ mod tests {
     fn test_crash_recovery() {
         let manager = StateManager::in_memory().unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test").unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
         let exec1 = manager.start_execution(workflow_id).unwrap();
         let exec2 = manager.start_execution(workflow_id).unwrap();
 
@@ -691,7 +719,7 @@ mod tests {
     fn test_execution_history() {
         let manager = StateManager::in_memory().unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test").unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
 
         // Create multiple executions
         for _ in 0..5 {
@@ -710,9 +738,9 @@ mod tests {
         let manager = StateManager::in_memory().unwrap();
 
         // Create multiple workflows with different execution counts
-        let wf1_id = manager.get_or_create_workflow("workflow-alpha").unwrap();
-        let wf2_id = manager.get_or_create_workflow("workflow-beta").unwrap();
-        let _wf3_id = manager.get_or_create_workflow("workflow-gamma").unwrap();
+        let wf1_id = manager.get_or_create_workflow("workflow-alpha", None).unwrap();
+        let wf2_id = manager.get_or_create_workflow("workflow-beta", None).unwrap();
+        let _wf3_id = manager.get_or_create_workflow("workflow-gamma", None).unwrap();
 
         // workflow-alpha: 3 successful executions
         for _ in 0..3 {

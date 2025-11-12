@@ -271,12 +271,18 @@ impl Cli {
         println!("Workflows:");
         println!();
         println!(
-            "{:<30} {:<12} {:<10} {:<10} {:<20}",
-            "Name", "Total", "Success", "Failed", "Last Execution"
+            "{:<30} {:<12} {:<12} {:<10} {:<10} {:<20}",
+            "Name", "Type", "Total", "Success", "Failed", "Last Execution"
         );
-        println!("{}", "-".repeat(100));
+        println!("{}", "-".repeat(110));
 
         for workflow in workflows {
+            let workflow_type = if workflow.schedule.is_some() {
+                "Cron"
+            } else {
+                "On-Demand"
+            };
+
             let last_exec = workflow
                 .last_execution
                 .map(|dt| {
@@ -287,8 +293,9 @@ impl Cli {
                 .unwrap_or_else(|| "Never".to_string());
 
             println!(
-                "{:<30} {:<12} {:<10} {:<10} {:<20}",
+                "{:<30} {:<12} {:<12} {:<10} {:<10} {:<20}",
                 workflow.name,
+                workflow_type,
                 workflow.execution_count,
                 workflow.success_count,
                 workflow.failed_count,
