@@ -613,11 +613,15 @@ mod tests {
         let manager = StateManager::in_memory().unwrap();
 
         // Create workflow
-        let workflow_id = manager.get_or_create_workflow("test-workflow", None).unwrap();
+        let workflow_id = manager
+            .get_or_create_workflow("test-workflow", None)
+            .unwrap();
         assert!(workflow_id > 0);
 
         // Get existing workflow
-        let workflow_id2 = manager.get_or_create_workflow("test-workflow", None).unwrap();
+        let workflow_id2 = manager
+            .get_or_create_workflow("test-workflow", None)
+            .unwrap();
         assert_eq!(workflow_id, workflow_id2);
     }
 
@@ -738,9 +742,15 @@ mod tests {
         let manager = StateManager::in_memory().unwrap();
 
         // Create multiple workflows with different execution counts
-        let wf1_id = manager.get_or_create_workflow("workflow-alpha", None).unwrap();
-        let wf2_id = manager.get_or_create_workflow("workflow-beta", None).unwrap();
-        let _wf3_id = manager.get_or_create_workflow("workflow-gamma", None).unwrap();
+        let wf1_id = manager
+            .get_or_create_workflow("workflow-alpha", None)
+            .unwrap();
+        let wf2_id = manager
+            .get_or_create_workflow("workflow-beta", None)
+            .unwrap();
+        let _wf3_id = manager
+            .get_or_create_workflow("workflow-gamma", None)
+            .unwrap();
 
         // workflow-alpha: 3 successful executions
         for _ in 0..3 {
