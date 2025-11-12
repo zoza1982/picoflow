@@ -1,8 +1,8 @@
 # Rust
 /target/
-Cargo.lock
 **/*.rs.bk
 *.pdb
+# Note: Cargo.lock should be committed for applications (not ignored)
 
 # IDE
 .idea/
