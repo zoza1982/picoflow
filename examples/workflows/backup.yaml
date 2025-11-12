@@ -30,7 +30,8 @@ tasks:
     type: shell
     depends_on: [backup_database]
     config:
-      command: "ssh backup@db.server.com 'test -f /backup/db.sql.gz'"
+      command: "/usr/bin/ssh"
+      args: ["backup@db.server.com", "test -f /backup/db.sql.gz"]
     retry: 1
 
   - name: cleanup_old_backups
