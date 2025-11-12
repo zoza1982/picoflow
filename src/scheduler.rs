@@ -195,20 +195,35 @@ impl TaskScheduler {
         Ok(false)
     }
 
-    /// Execute a single task
+    /// Execute a single task with timeout enforcement
     async fn execute_task(
         &self,
         task: &TaskConfig,
-        _timeout: u64,
+        timeout_secs: u64,
     ) -> anyhow::Result<crate::models::ExecutionResult> {
-        match task.task_type {
-            crate::models::TaskType::Shell => self.shell_executor.execute(&task.config).await,
-            crate::models::TaskType::Ssh => {
-                Err(anyhow::anyhow!("SSH executor not yet implemented"))
+        use tokio::time::{timeout, Duration};
+
+        // Wrap task execution with timeout
+        let task_future = async {
+            match task.task_type {
+                crate::models::TaskType::Shell => self.shell_executor.execute(&task.config).await,
+                crate::models::TaskType::Ssh => {
+                    Err(anyhow::anyhow!("SSH executor not yet implemented"))
+                }
+                crate::models::TaskType::Http => {
+                    Err(anyhow::anyhow!("HTTP executor not yet implemented"))
+                }
             }
-            crate::models::TaskType::Http => {
-                Err(anyhow::anyhow!("HTTP executor not yet implemented"))
-            }
+        };
+
+        // Apply timeout
+        match timeout(Duration::from_secs(timeout_secs), task_future).await {
+            Ok(result) => result,
+            Err(_) => Err(anyhow::anyhow!(
+                "Task '{}' timed out after {} seconds",
+                task.name,
+                timeout_secs
+            )),
         }
     }
 }

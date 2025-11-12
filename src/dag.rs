@@ -6,7 +6,15 @@ use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 
-/// DAG engine for workflow task management
+/// DAG (Directed Acyclic Graph) engine for workflow task management.
+///
+/// The DAG engine builds and validates task dependency graphs using petgraph.
+/// It provides topological sorting for sequential execution and parallel level
+/// computation for concurrent execution in Phase 3.
+///
+/// # Performance
+///
+/// Target: <50ms for 100 tasks (PRD PERF-005)
 #[derive(Debug)]
 pub struct DagEngine {
     graph: DiGraph<String, ()>,
@@ -14,7 +22,50 @@ pub struct DagEngine {
 }
 
 impl DagEngine {
-    /// Build DAG from task configurations
+    /// Build and validate a DAG from task configurations.
+    ///
+    /// This method constructs a directed graph from task dependencies and validates
+    /// that the graph is acyclic (no circular dependencies). If a cycle is detected,
+    /// the error message includes the cycle path for debugging.
+    ///
+    /// # Arguments
+    ///
+    /// * `tasks` - Array of task configurations with dependencies
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(DagEngine)` - Validated DAG engine ready for execution planning
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::CycleDetected` - If circular dependencies are found
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use picoflow::dag::DagEngine;
+    /// use picoflow::models::{TaskConfig, TaskType, TaskExecutorConfig, ShellConfig};
+    ///
+    /// let tasks = vec![
+    ///     TaskConfig {
+    ///         name: "task_a".to_string(),
+    ///         task_type: TaskType::Shell,
+    ///         depends_on: vec![],
+    ///         config: TaskExecutorConfig::Shell(ShellConfig {
+    ///             command: "/bin/echo".to_string(),
+    ///             args: vec!["hello".to_string()],
+    ///             workdir: None,
+    ///             env: None,
+    ///         }),
+    ///         retry: Some(3),
+    ///         timeout: Some(300),
+    ///         continue_on_failure: false,
+    ///     },
+    /// ];
+    ///
+    /// let dag = DagEngine::build(&tasks)?;
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn build(tasks: &[TaskConfig]) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut task_indices = HashMap::new();
@@ -46,7 +97,29 @@ impl DagEngine {
         Ok(engine)
     }
 
-    /// Validate that the graph is acyclic
+    /// Validate that the graph contains no cycles.
+    ///
+    /// This method checks for circular dependencies in the task graph. If a cycle
+    /// is found, it uses DFS to locate and report the cycle path in the error message.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If graph is acyclic (valid DAG)
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::CycleDetected` - If circular dependencies exist, with cycle path
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::dag::DagEngine;
+    /// # use picoflow::models::TaskConfig;
+    /// # let tasks: Vec<TaskConfig> = vec![];
+    /// let dag = DagEngine::build(&tasks)?;
+    /// dag.validate_acyclic()?; // Called automatically by build()
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn validate_acyclic(&self) -> Result<()> {
         if is_cyclic_directed(&self.graph) {
             // Find a cycle for better error message
@@ -103,7 +176,32 @@ impl DagEngine {
         None
     }
 
-    /// Get topologically sorted task names
+    /// Get task names in topologically sorted order for sequential execution.
+    ///
+    /// Returns tasks ordered such that all dependencies of a task appear before
+    /// the task itself. This ordering is used by the scheduler for sequential execution.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<String>)` - Task names in dependency-safe execution order
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::CycleDetected` - If graph contains cycles (should not occur after build)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::dag::DagEngine;
+    /// # use picoflow::models::TaskConfig;
+    /// # let tasks: Vec<TaskConfig> = vec![];
+    /// let dag = DagEngine::build(&tasks)?;
+    /// let execution_order = dag.topological_sort()?;
+    /// for task_name in execution_order {
+    ///     println!("Execute: {}", task_name);
+    /// }
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn topological_sort(&self) -> Result<Vec<String>> {
         let sorted_indices = toposort(&self.graph, None).map_err(|_| {
             PicoFlowError::CycleDetected("Cycle detected during topological sort".to_string())
@@ -115,9 +213,31 @@ impl DagEngine {
             .collect())
     }
 
-    /// Get tasks grouped by execution level (for parallel execution)
-    /// Level 0 = tasks with no dependencies
-    /// Level 1 = tasks depending only on level 0, etc.
+    /// Get tasks grouped by execution level for parallel execution (Phase 3).
+    ///
+    /// Returns tasks organized into execution levels where all tasks in a level
+    /// can be executed in parallel:
+    /// - Level 0: Tasks with no dependencies
+    /// - Level 1: Tasks depending only on level 0 tasks
+    /// - Level N: Tasks whose deepest dependency is at level N-1
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<Vec<String>>` - Array of execution levels, each containing task names
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::dag::DagEngine;
+    /// # use picoflow::models::TaskConfig;
+    /// # let tasks: Vec<TaskConfig> = vec![];
+    /// let dag = DagEngine::build(&tasks)?;
+    /// let levels = dag.parallel_levels();
+    /// for (level_num, level_tasks) in levels.iter().enumerate() {
+    ///     println!("Level {}: can run {} tasks in parallel", level_num, level_tasks.len());
+    /// }
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn parallel_levels(&self) -> Vec<Vec<String>> {
         let mut levels: Vec<Vec<String>> = Vec::new();
         let mut node_levels: HashMap<NodeIndex, usize> = HashMap::new();
@@ -161,7 +281,30 @@ impl DagEngine {
         max_dep_level
     }
 
-    /// Get all tasks that depend on the given task
+    /// Get all tasks that directly depend on the given task.
+    ///
+    /// Returns the immediate children of a task in the dependency graph
+    /// (tasks that will be unblocked when this task completes).
+    ///
+    /// # Arguments
+    ///
+    /// * `task_name` - Name of the task to query
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<String>` - Names of tasks that depend on this task (empty if none or task not found)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::dag::DagEngine;
+    /// # use picoflow::models::TaskConfig;
+    /// # let tasks: Vec<TaskConfig> = vec![];
+    /// let dag = DagEngine::build(&tasks)?;
+    /// let dependents = dag.get_dependents("task_a");
+    /// println!("Tasks waiting for task_a: {:?}", dependents);
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn get_dependents(&self, task_name: &str) -> Vec<String> {
         if let Some(&index) = self.task_indices.get(task_name) {
             self.graph
@@ -173,7 +316,30 @@ impl DagEngine {
         }
     }
 
-    /// Get all tasks that the given task depends on
+    /// Get all tasks that the given task directly depends on.
+    ///
+    /// Returns the immediate parents of a task in the dependency graph
+    /// (tasks that must complete before this task can start).
+    ///
+    /// # Arguments
+    ///
+    /// * `task_name` - Name of the task to query
+    ///
+    /// # Returns
+    ///
+    /// * `Vec<String>` - Names of tasks this task depends on (empty if none or task not found)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::dag::DagEngine;
+    /// # use picoflow::models::TaskConfig;
+    /// # let tasks: Vec<TaskConfig> = vec![];
+    /// let dag = DagEngine::build(&tasks)?;
+    /// let dependencies = dag.get_dependencies("task_c");
+    /// println!("task_c requires: {:?}", dependencies);
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn get_dependencies(&self, task_name: &str) -> Vec<String> {
         if let Some(&index) = self.task_indices.get(task_name) {
             self.graph

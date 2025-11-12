@@ -5,16 +5,76 @@ use crate::models::{TaskExecution, TaskStatus, WorkflowExecution};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-/// State manager for workflow and task execution tracking
+/// State manager for workflow and task execution tracking using SQLite.
+///
+/// The `StateManager` provides persistent storage for workflow executions and task results.
+/// It uses SQLite configured for edge devices (WAL mode, minimal caching) with foreign key
+/// constraints for data integrity.
+///
+/// # Thread Safety
+///
+/// This type is `Clone` and uses `Arc<Mutex<Connection>>` for safe concurrent access.
+/// All database operations acquire the mutex lock.
+///
+/// # Database Configuration
+///
+/// - WAL (Write-Ahead Logging) for better concurrency
+/// - NORMAL synchronous mode (balance safety/performance)
+/// - 2MB cache size
+/// - Memory temp store
+/// - No memory mapping (safer for SD cards)
+/// - Foreign keys enabled
 #[derive(Clone)]
 pub struct StateManager {
     conn: Arc<Mutex<Connection>>,
 }
 
 impl StateManager {
-    /// Create a new state manager with SQLite database
+    /// Helper method to acquire mutex lock with proper poison error handling.
+    ///
+    /// If the mutex is poisoned (another thread panicked while holding it),
+    /// we recover the data since SQLite operations are transactional and the
+    /// poisoned state doesn't corrupt the database.
+    fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>> {
+        match self.conn.lock() {
+            Ok(guard) => Ok(guard),
+            Err(poison) => {
+                // Mutex is poisoned, but SQLite state is still valid
+                // Recover the guard and log the error
+                tracing::warn!("Mutex was poisoned, recovering SQLite connection");
+                Ok(poison.into_inner())
+            }
+        }
+    }
+
+    /// Create a new state manager with file-based SQLite database.
+    ///
+    /// This initializes the database schema if needed and configures SQLite
+    /// for optimal performance on edge devices.
+    ///
+    /// # Arguments
+    ///
+    /// * `db_path` - Path to SQLite database file (created if doesn't exist)
+    ///
+    /// # Returns
+    ///
+    /// * `Result<StateManager>` - Configured state manager ready for use
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Io` - If database file cannot be created/opened
+    /// * `PicoFlowError::Sqlite` - If schema initialization fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use picoflow::state::StateManager;
+    ///
+    /// let manager = StateManager::new("/var/lib/picoflow/state.db")?;
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let conn = Connection::open(db_path)?;
 
@@ -54,7 +114,7 @@ impl StateManager {
 
     /// Initialize database schema
     fn init_schema(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute_batch(
             "
@@ -106,9 +166,23 @@ impl StateManager {
         Ok(())
     }
 
-    /// Get or create workflow ID
+    /// Get or create a workflow by name, returning its database ID.
+    ///
+    /// If the workflow already exists, returns its ID. Otherwise creates a new workflow entry.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Workflow name (from YAML config)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(i64)` - Database ID of the workflow
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Sqlite` - If database operation fails
     pub fn get_or_create_workflow(&self, name: &str) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         // Try to get existing workflow
         let existing: Option<i64> = conn
@@ -129,9 +203,23 @@ impl StateManager {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Start a new workflow execution
+    /// Start a new workflow execution, creating a database record.
+    ///
+    /// Creates an execution entry with status `Running` and current timestamp.
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_id` - Database ID of the workflow (from `get_or_create_workflow`)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(i64)` - Database ID of the new execution
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Sqlite` - If database operation fails
     pub fn start_execution(&self, workflow_id: i64) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute(
             "INSERT INTO executions (workflow_id, started_at, status) VALUES (?1, ?2, ?3)",
@@ -141,9 +229,20 @@ impl StateManager {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Update execution status
+    /// Update workflow execution status and set completion time if terminal.
+    ///
+    /// Sets `completed_at` timestamp for terminal states (Success, Failed, Timeout).
+    ///
+    /// # Arguments
+    ///
+    /// * `execution_id` - Database ID of the execution
+    /// * `status` - New status to set
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Sqlite` - If database operation fails
     pub fn update_execution_status(&self, execution_id: i64, status: TaskStatus) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute(
             "UPDATE executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
@@ -164,9 +263,25 @@ impl StateManager {
         Ok(())
     }
 
-    /// Start a task execution
+    /// Start a task execution within a workflow execution.
+    ///
+    /// Creates a task execution record with status `Running`.
+    ///
+    /// # Arguments
+    ///
+    /// * `execution_id` - Parent workflow execution ID
+    /// * `task_name` - Name of the task being executed
+    /// * `attempt` - Attempt number (1 for first try, increments with retries)
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(i64)` - Database ID of the task execution record
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Sqlite` - If database operation fails
     pub fn start_task(&self, execution_id: i64, task_name: &str, attempt: i32) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute(
             "INSERT INTO task_executions (execution_id, task_name, status, started_at, attempt) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -182,7 +297,22 @@ impl StateManager {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Update task execution status
+    /// Update task execution status with results.
+    ///
+    /// Records task completion status, exit code, and output (stdout/stderr).
+    /// Sets `completed_at` timestamp for terminal states.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_execution_id` - Database ID of the task execution
+    /// * `status` - New status (Success, Failed, Timeout, etc.)
+    /// * `exit_code` - Process exit code (if applicable)
+    /// * `stdout` - Standard output (truncated to 10MB max per PRD)
+    /// * `stderr` - Standard error (truncated to 10MB max per PRD)
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Sqlite` - If database operation fails
     pub fn update_task_status(
         &self,
         task_execution_id: i64,
@@ -191,7 +321,7 @@ impl StateManager {
         stdout: Option<&str>,
         stderr: Option<&str>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute(
             "UPDATE task_executions SET status = ?1, completed_at = ?2, exit_code = ?3, stdout = ?4, stderr = ?5 WHERE id = ?6",
@@ -219,7 +349,7 @@ impl StateManager {
         retry_count: i32,
         next_retry_at: DateTime<Utc>,
     ) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         conn.execute(
             "UPDATE task_executions SET status = ?1, retry_count = ?2, next_retry_at = ?3 WHERE id = ?4",
@@ -236,7 +366,7 @@ impl StateManager {
 
     /// Get execution by ID
     pub fn get_execution(&self, execution_id: i64) -> Result<Option<WorkflowExecution>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         let result = conn
             .query_row(
@@ -259,7 +389,7 @@ impl StateManager {
 
     /// Get task executions for a workflow execution
     pub fn get_task_executions(&self, execution_id: i64) -> Result<Vec<TaskExecution>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         let mut stmt = conn.prepare(
             "SELECT id, execution_id, task_name, status, started_at, completed_at, exit_code, stdout, stderr, attempt, retry_count, next_retry_at
@@ -291,9 +421,31 @@ impl StateManager {
         Ok(executions)
     }
 
-    /// Recover from crash - find and mark incomplete executions as failed
+    /// Recover from process crash by marking incomplete executions as failed.
+    ///
+    /// Finds all executions with status `Running` (indicating the process crashed
+    /// while they were executing) and marks them as `Failed` with current timestamp.
+    /// This is called on daemon startup for crash recovery.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<i64>)` - List of execution IDs that were recovered
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Sqlite` - If database operation fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::state::StateManager;
+    /// let manager = StateManager::new("/var/lib/picoflow/state.db")?;
+    /// let recovered = manager.recover_from_crash()?;
+    /// println!("Recovered {} crashed executions", recovered.len());
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
     pub fn recover_from_crash(&self) -> Result<Vec<i64>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         // Find executions that were running when process crashed
         let mut stmt = conn.prepare("SELECT id FROM executions WHERE status = ?1")?;
@@ -319,7 +471,7 @@ impl StateManager {
         workflow_name: &str,
         limit: usize,
     ) -> Result<Vec<WorkflowExecution>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.lock_conn()?;
 
         let mut stmt = conn.prepare(
             "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
