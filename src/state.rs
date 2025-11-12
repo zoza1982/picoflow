@@ -712,7 +712,7 @@ mod tests {
         // Create multiple workflows with different execution counts
         let wf1_id = manager.get_or_create_workflow("workflow-alpha").unwrap();
         let wf2_id = manager.get_or_create_workflow("workflow-beta").unwrap();
-        let wf3_id = manager.get_or_create_workflow("workflow-gamma").unwrap();
+        let _wf3_id = manager.get_or_create_workflow("workflow-gamma").unwrap();
 
         // workflow-alpha: 3 successful executions
         for _ in 0..3 {
