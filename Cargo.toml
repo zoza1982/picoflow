@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "development-tools"]
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
+futures = "0.3"
 
 # DAG & scheduling
 petgraph = "0.6"

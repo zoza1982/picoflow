@@ -7,6 +7,7 @@ pub mod dag;
 pub mod error;
 pub mod executors;
 pub mod logging;
+pub mod metrics;
 pub mod models;
 pub mod parser;
 pub mod retry;

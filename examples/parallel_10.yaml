@@ -1,0 +1,118 @@
+name: parallel-10-tasks
+description: "Test workflow with 10 parallel tasks for memory testing"
+
+config:
+  max_parallel: 10
+  retry_default: 0
+  timeout_default: 30
+
+tasks:
+  # Level 0: No dependencies
+  - name: init
+    type: shell
+    config:
+      command: "/bin/echo"
+      args: ["Starting 10 parallel tasks"]
+    retry: 0
+    timeout: 5
+
+  # Level 1: 10 parallel tasks depending on init
+  - name: task_1
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 1 running' && sleep 3 && echo 'Task 1 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_2
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 2 running' && sleep 3 && echo 'Task 2 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_3
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 3 running' && sleep 3 && echo 'Task 3 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_4
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 4 running' && sleep 3 && echo 'Task 4 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_5
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 5 running' && sleep 3 && echo 'Task 5 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_6
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 6 running' && sleep 3 && echo 'Task 6 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_7
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 7 running' && sleep 3 && echo 'Task 7 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_8
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 8 running' && sleep 3 && echo 'Task 8 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_9
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 9 running' && sleep 3 && echo 'Task 9 done'"]
+    retry: 0
+    timeout: 10
+
+  - name: task_10
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 10 running' && sleep 3 && echo 'Task 10 done'"]
+    retry: 0
+    timeout: 10
+
+  # Level 2: Finalize after all parallel tasks complete
+  - name: finalize
+    type: shell
+    depends_on: [task_1, task_2, task_3, task_4, task_5, task_6, task_7, task_8, task_9, task_10]
+    config:
+      command: "/bin/echo"
+      args: ["All 10 tasks complete"]
+    retry: 0
+    timeout: 5

@@ -1,4 +1,4 @@
-//! Sequential task scheduler for workflow execution
+//! Task scheduler for workflow execution (sequential and parallel)
 
 use crate::dag::DagEngine;
 use crate::error::Result;
@@ -9,9 +9,13 @@ use crate::models::{TaskConfig, TaskStatus, WorkflowConfig};
 use crate::state::StateManager;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
 
-/// Sequential task scheduler (Phase 1 MVP)
+/// Task scheduler supporting both sequential and parallel execution
+///
+/// Phase 1: Sequential execution (topological sort)
+/// Phase 3: Parallel execution with configurable concurrency limits
 pub struct TaskScheduler {
     state_manager: Arc<StateManager>,
     shell_executor: ShellExecutor,
@@ -28,17 +32,28 @@ impl TaskScheduler {
         }
     }
 
-    /// Execute a workflow once (one-shot mode)
+    /// Execute a workflow once (supports both sequential and parallel execution)
+    ///
+    /// # Execution Strategy
+    ///
+    /// - Phase 1: Sequential execution (max_parallel = 1)
+    /// - Phase 3: Parallel execution by DAG levels (max_parallel > 1)
+    ///
+    /// When max_parallel > 1, tasks are executed in parallel levels:
+    /// - All tasks at the same level run concurrently
+    /// - Semaphore enforces max_parallel limit across all levels
+    /// - Wait for all tasks at a level to complete before proceeding
+    /// - Stop on first failure unless continue_on_failure is set
+    ///
+    /// # Performance
+    ///
+    /// Target: 10 parallel tasks <50MB memory (PRD PERF-006)
     pub async fn execute_workflow(&self, config: &WorkflowConfig) -> Result<bool> {
         info!("Starting workflow execution: {}", config.name);
 
         // Build DAG and validate
         let dag = DagEngine::build(&config.tasks)?;
         info!("DAG validation successful");
-
-        // Get topological sort order
-        let execution_order = dag.topological_sort()?;
-        info!("Execution order: {:?}", execution_order);
 
         // Create workflow execution record
         let workflow_id = self
@@ -55,11 +70,57 @@ impl TaskScheduler {
             .map(|t| (t.name.clone(), t.clone()))
             .collect();
 
-        // Execute tasks in topological order
+        // Execute workflow based on max_parallel setting
+        let workflow_success = if config.config.max_parallel == 1 {
+            // Sequential execution (Phase 1 behavior)
+            info!("Executing workflow sequentially (max_parallel=1)");
+            let execution_order = dag.topological_sort()?;
+            info!("Execution order: {:?}", execution_order);
+            self.execute_sequential(execution_id, &execution_order, &task_map)
+                .await?
+        } else {
+            // Parallel execution by DAG levels (Phase 3)
+            let parallel_levels = dag.parallel_levels();
+            info!(
+                "Executing workflow in parallel (max_parallel={}, levels={})",
+                config.config.max_parallel,
+                parallel_levels.len()
+            );
+            self.execute_parallel(
+                execution_id,
+                &parallel_levels,
+                &task_map,
+                config.config.max_parallel,
+            )
+            .await?
+        };
+
+        // Update workflow execution status
+        let final_status = if workflow_success {
+            TaskStatus::Success
+        } else {
+            TaskStatus::Failed
+        };
+
+        self.state_manager
+            .update_execution_status(execution_id, final_status.clone())?;
+
+        info!("Workflow execution completed with status: {}", final_status);
+
+        Ok(workflow_success)
+    }
+
+    /// Execute tasks sequentially in topological order
+    async fn execute_sequential(
+        &self,
+        execution_id: i64,
+        execution_order: &[String],
+        task_map: &HashMap<String, TaskConfig>,
+    ) -> Result<bool> {
         let mut workflow_success = true;
 
         for task_name in execution_order {
-            let task = &task_map[&task_name];
+            let task = &task_map[task_name];
 
             info!("Executing task: {}", task_name);
 
@@ -84,17 +145,122 @@ impl TaskScheduler {
             }
         }
 
-        // Update workflow execution status
-        let final_status = if workflow_success {
-            TaskStatus::Success
-        } else {
-            TaskStatus::Failed
-        };
+        Ok(workflow_success)
+    }
 
-        self.state_manager
-            .update_execution_status(execution_id, final_status.clone())?;
+    /// Execute tasks in parallel by DAG levels
+    ///
+    /// Each level is executed concurrently, with a semaphore enforcing max_parallel limit.
+    /// All tasks at a level must complete before moving to the next level.
+    async fn execute_parallel(
+        &self,
+        execution_id: i64,
+        parallel_levels: &[Vec<String>],
+        task_map: &HashMap<String, TaskConfig>,
+        max_parallel: usize,
+    ) -> Result<bool> {
+        let mut workflow_success = true;
 
-        info!("Workflow execution completed with status: {}", final_status);
+        // Create semaphore to enforce max_parallel limit
+        let semaphore = Arc::new(Semaphore::new(max_parallel));
+
+        for (level_num, level_tasks) in parallel_levels.iter().enumerate() {
+            info!(
+                "Executing level {} with {} tasks: {:?}",
+                level_num,
+                level_tasks.len(),
+                level_tasks
+            );
+
+            // Spawn tasks for this level
+            let mut handles = Vec::new();
+
+            for task_name in level_tasks {
+                let task = task_map[task_name].clone();
+                let task_name_owned = task_name.clone();
+                let semaphore_clone = semaphore.clone();
+
+                // Clone necessary data for the spawned task
+                let state_manager = self.state_manager.clone();
+                let shell_executor = self.shell_executor.clone();
+                let ssh_executor = self.ssh_executor.clone();
+
+                // Spawn task execution
+                let handle = tokio::spawn(async move {
+                    // Acquire semaphore permit
+                    let _permit = match semaphore_clone.acquire().await {
+                        Ok(permit) => permit,
+                        Err(_) => {
+                            warn!(
+                                "Semaphore closed during task acquisition for '{}', shutdown in progress",
+                                task_name_owned
+                            );
+                            return (
+                                task_name_owned,
+                                task.continue_on_failure,
+                                Err(crate::error::PicoFlowError::Other(
+                                    "Shutdown in progress".to_string(),
+                                )),
+                            );
+                        }
+                    };
+
+                    info!("Task '{}' acquired execution permit", task_name_owned);
+
+                    // Create a temporary scheduler for this task
+                    let temp_scheduler = TaskScheduler {
+                        state_manager,
+                        shell_executor,
+                        ssh_executor,
+                    };
+
+                    // Execute task with retry logic
+                    let result = temp_scheduler
+                        .execute_task_with_retry(execution_id, &task)
+                        .await;
+
+                    // Permit is automatically released when _permit is dropped
+                    (task_name_owned, task.continue_on_failure, result)
+                });
+
+                handles.push(handle);
+            }
+
+            // Wait for all tasks at this level to complete
+            let results = futures::future::join_all(handles).await;
+
+            // Check results
+            for result in results {
+                match result {
+                    Ok((task_name, continue_on_failure, Ok(task_success))) => {
+                        if !task_success {
+                            workflow_success = false;
+
+                            if !continue_on_failure {
+                                error!(
+                                    "Task '{}' failed and continue_on_failure=false, stopping workflow",
+                                    task_name
+                                );
+                                return Ok(false);
+                            } else {
+                                warn!(
+                                    "Task '{}' failed but continue_on_failure=true, continuing",
+                                    task_name
+                                );
+                            }
+                        }
+                    }
+                    Ok((task_name, _, Err(e))) => {
+                        error!("Task '{}' execution error: {}", task_name, e);
+                        return Ok(false);
+                    }
+                    Err(e) => {
+                        error!("Task spawn error: {}", e);
+                        return Ok(false);
+                    }
+                }
+            }
+        }
 
         Ok(workflow_success)
     }

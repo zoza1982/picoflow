@@ -1,7 +1,9 @@
 //! SQLite-based state management for workflow executions
 
 use crate::error::Result;
-use crate::models::{TaskExecution, TaskStatus, WorkflowExecution, WorkflowSummary};
+use crate::models::{
+    TaskExecution, TaskStatus, WorkflowExecution, WorkflowStatistics, WorkflowSummary,
+};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -524,6 +526,177 @@ impl StateManager {
         }
 
         Ok(executions)
+    }
+
+    /// Get execution history filtered by status
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_name` - Name of the workflow
+    /// * `status_filter` - Optional status filter ("success", "failed", "timeout")
+    /// * `limit` - Maximum number of records to return
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<WorkflowExecution>)` - List of workflow executions matching the filter
+    pub fn get_execution_history_filtered(
+        &self,
+        workflow_name: &str,
+        status_filter: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<WorkflowExecution>> {
+        let conn = self.lock_conn()?;
+
+        let (query, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) =
+            if let Some(status) = status_filter {
+                (
+                    "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
+                 FROM executions e
+                 JOIN workflows w ON e.workflow_id = w.id
+                 WHERE w.name = ?1 AND e.status = ?2
+                 ORDER BY e.started_at DESC
+                 LIMIT ?3"
+                        .to_string(),
+                    vec![
+                        Box::new(workflow_name.to_string()),
+                        Box::new(status.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            } else {
+                (
+                    "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
+                 FROM executions e
+                 JOIN workflows w ON e.workflow_id = w.id
+                 WHERE w.name = ?1
+                 ORDER BY e.started_at DESC
+                 LIMIT ?2"
+                        .to_string(),
+                    vec![Box::new(workflow_name.to_string()), Box::new(limit as i64)],
+                )
+            };
+
+        let mut stmt = conn.prepare(&query)?;
+        let params_refs: Vec<&dyn rusqlite::ToSql> =
+            params_vec.iter().map(|p| p.as_ref()).collect();
+
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok(WorkflowExecution {
+                id: row.get(0)?,
+                workflow_id: row.get(1)?,
+                started_at: row.get(2)?,
+                completed_at: row.get(3)?,
+                status: parse_task_status(&row.get::<_, String>(4)?),
+            })
+        })?;
+
+        let mut executions = Vec::new();
+        for row in rows {
+            executions.push(row?);
+        }
+
+        Ok(executions)
+    }
+
+    /// Get workflow execution statistics
+    ///
+    /// Returns aggregate statistics including:
+    /// - Total execution count
+    /// - Success count and rate
+    /// - Failure count and rate
+    /// - Average duration in seconds
+    /// - Last 24h execution count
+    ///
+    /// # Arguments
+    ///
+    /// * `workflow_name` - Name of the workflow
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(WorkflowStatistics)` - Aggregate statistics for the workflow
+    pub fn get_workflow_statistics(&self, workflow_name: &str) -> Result<WorkflowStatistics> {
+        let conn = self.lock_conn()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
+                AVG(CASE
+                    WHEN e.completed_at IS NOT NULL
+                    THEN (JULIANDAY(e.completed_at) - JULIANDAY(e.started_at)) * 86400
+                    ELSE NULL
+                END) as avg_duration_seconds,
+                SUM(CASE
+                    WHEN e.started_at > datetime('now', '-24 hours')
+                    THEN 1
+                    ELSE 0
+                END) as last_24h_count,
+                MAX(e.started_at) as last_execution
+             FROM executions e
+             JOIN workflows w ON e.workflow_id = w.id
+             WHERE w.name = ?1",
+        )?;
+
+        let stats = stmt.query_row(params![workflow_name], |row| {
+            let total: i64 = row.get(0)?;
+            let success_count: i64 = row.get(1)?;
+            let failed_count: i64 = row.get(2)?;
+            let avg_duration_seconds: Option<f64> = row.get(3)?;
+            let last_24h_count: i64 = row.get(4)?;
+            let last_execution: Option<DateTime<Utc>> = row.get(5)?;
+
+            let success_rate = if total > 0 {
+                (success_count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let failure_rate = if total > 0 {
+                (failed_count as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            Ok(WorkflowStatistics {
+                total_executions: total,
+                success_count,
+                failed_count,
+                success_rate,
+                failure_rate,
+                avg_duration_seconds,
+                last_24h_count,
+                last_execution,
+            })
+        })?;
+
+        Ok(stats)
+    }
+
+    /// Delete executions older than retention period
+    ///
+    /// This method removes old execution records and associated task executions
+    /// to keep the database size manageable. Foreign key cascades handle
+    /// deletion of task_executions automatically.
+    ///
+    /// # Arguments
+    ///
+    /// * `retention_days` - Number of days to retain execution history
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(usize)` - Number of executions deleted
+    pub fn cleanup_old_executions(&self, retention_days: u32) -> Result<usize> {
+        let conn = self.lock_conn()?;
+
+        let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
+
+        let deleted = conn.execute(
+            "DELETE FROM executions WHERE completed_at < ?1",
+            params![cutoff],
+        )?;
+
+        Ok(deleted)
     }
 
     /// List all workflows with their execution statistics.

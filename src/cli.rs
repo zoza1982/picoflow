@@ -68,6 +68,43 @@ pub enum Commands {
         #[command(subcommand)]
         command: DaemonCommands,
     },
+
+    /// Show workflow execution history
+    History {
+        /// Workflow name
+        #[arg(short, long)]
+        workflow: String,
+
+        /// Filter by status (success, failed, timeout)
+        #[arg(short, long)]
+        status: Option<String>,
+
+        /// Number of records to show
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+    },
+
+    /// Show workflow execution statistics
+    Stats {
+        /// Workflow name
+        #[arg(short, long)]
+        workflow: String,
+    },
+
+    /// Show task execution logs
+    Logs {
+        /// Workflow name
+        #[arg(short, long)]
+        workflow: String,
+
+        /// Execution ID (optional, shows latest if not specified)
+        #[arg(short, long)]
+        execution_id: Option<i64>,
+
+        /// Task name filter (optional, shows all if not specified)
+        #[arg(short, long)]
+        task: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -137,6 +174,23 @@ impl Cli {
             }
             Commands::Daemon { command } => {
                 self.handle_daemon_command(command).await?;
+            }
+            Commands::History {
+                workflow,
+                status,
+                limit,
+            } => {
+                self.show_history(workflow, status.as_deref(), *limit)?;
+            }
+            Commands::Stats { workflow } => {
+                self.show_stats(workflow)?;
+            }
+            Commands::Logs {
+                workflow,
+                execution_id,
+                task,
+            } => {
+                self.show_logs(workflow, *execution_id, task.as_deref())?;
             }
         }
         Ok(())
@@ -381,6 +435,213 @@ impl Cli {
         }
 
         Ok(())
+    }
+
+    /// Show execution history with optional status filter
+    fn show_history(
+        &self,
+        workflow_name: &str,
+        status_filter: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path)?;
+
+        let executions =
+            state_manager.get_execution_history_filtered(workflow_name, status_filter, limit)?;
+
+        if executions.is_empty() {
+            println!(
+                "No execution history found for workflow '{}'",
+                workflow_name
+            );
+            return Ok(());
+        }
+
+        println!("\nExecution History for '{}'", workflow_name);
+        if let Some(status) = status_filter {
+            println!("Filtered by status: {}", status);
+        }
+        println!();
+        println!(
+            "{:<8} {:<20} {:<20} {:<10} {:<12}",
+            "ID", "Started", "Completed", "Status", "Duration"
+        );
+        println!("{:-<78}", "");
+
+        for exec in &executions {
+            let started = exec.started_at.format("%Y-%m-%d %H:%M:%S");
+            let completed = exec
+                .completed_at
+                .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "N/A".to_string());
+
+            let duration = if let Some(completed_at) = exec.completed_at {
+                let duration = (completed_at - exec.started_at).num_seconds();
+                format_duration(duration)
+            } else {
+                "N/A".to_string()
+            };
+
+            println!(
+                "{:<8} {:<20} {:<20} {:<10} {:<12}",
+                exec.id,
+                started,
+                completed,
+                exec.status.to_string(),
+                duration
+            );
+        }
+
+        println!();
+        Ok(())
+    }
+
+    /// Show workflow execution statistics
+    fn show_stats(&self, workflow_name: &str) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path)?;
+
+        let stats = state_manager.get_workflow_statistics(workflow_name)?;
+
+        println!("\nStatistics for workflow '{}'", workflow_name);
+        println!("{:-<50}", "");
+        println!("Total Executions:      {}", stats.total_executions);
+        println!("Success Count:         {}", stats.success_count);
+        println!("Failed Count:          {}", stats.failed_count);
+        println!("Success Rate:          {:.1}%", stats.success_rate);
+        println!("Failure Rate:          {:.1}%", stats.failure_rate);
+
+        if let Some(avg_duration) = stats.avg_duration_seconds {
+            println!(
+                "Average Duration:      {}",
+                format_duration(avg_duration as i64)
+            );
+        } else {
+            println!("Average Duration:      N/A");
+        }
+
+        println!("Last 24h Executions:   {}", stats.last_24h_count);
+
+        if let Some(last_exec) = stats.last_execution {
+            println!(
+                "Last Execution:        {}",
+                last_exec.format("%Y-%m-%d %H:%M:%S")
+            );
+        } else {
+            println!("Last Execution:        N/A");
+        }
+
+        println!();
+        Ok(())
+    }
+
+    /// Show task execution logs
+    fn show_logs(
+        &self,
+        workflow_name: &str,
+        execution_id: Option<i64>,
+        task_filter: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path)?;
+
+        // Get execution ID if not provided
+        let exec_id = if let Some(id) = execution_id {
+            id
+        } else {
+            // Get latest execution
+            let history = state_manager.get_execution_history(workflow_name, 1)?;
+            if history.is_empty() {
+                println!(
+                    "No execution history found for workflow '{}'",
+                    workflow_name
+                );
+                return Ok(());
+            }
+            history[0].id
+        };
+
+        // Get task executions
+        let tasks = state_manager.get_task_executions(exec_id)?;
+
+        if tasks.is_empty() {
+            println!("No task executions found for execution ID {}", exec_id);
+            return Ok(());
+        }
+
+        // Filter by task name if specified
+        let filtered_tasks: Vec<_> = if let Some(task_name) = task_filter {
+            tasks
+                .into_iter()
+                .filter(|t| t.task_name == task_name)
+                .collect()
+        } else {
+            tasks
+        };
+
+        if filtered_tasks.is_empty() {
+            if let Some(task_name) = task_filter {
+                println!(
+                    "No tasks found matching '{}' for execution ID {}",
+                    task_name, exec_id
+                );
+            }
+            return Ok(());
+        }
+
+        println!("\nTask Logs for execution ID: {}", exec_id);
+        if let Some(task_name) = task_filter {
+            println!("Filtered by task: {}", task_name);
+        }
+        println!();
+
+        for task in &filtered_tasks {
+            println!("{:-<80}", "");
+            println!("Task: {}", task.task_name);
+            println!("Status: {}", task.status);
+            println!("Started: {}", task.started_at.format("%Y-%m-%d %H:%M:%S"));
+            if let Some(completed) = task.completed_at {
+                println!("Completed: {}", completed.format("%Y-%m-%d %H:%M:%S"));
+                let duration = (completed - task.started_at).num_seconds();
+                println!("Duration: {}", format_duration(duration));
+            }
+            if let Some(exit_code) = task.exit_code {
+                println!("Exit Code: {}", exit_code);
+            }
+            println!("Attempt: {} / {}", task.attempt, task.retry_count + 1);
+
+            if let Some(stdout) = &task.stdout {
+                if !stdout.is_empty() {
+                    println!("\nStdout:");
+                    println!("{}", stdout);
+                }
+            }
+
+            if let Some(stderr) = &task.stderr {
+                if !stderr.is_empty() {
+                    println!("\nStderr:");
+                    println!("{}", stderr);
+                }
+            }
+
+            println!();
+        }
+
+        Ok(())
+    }
+}
+
+/// Format duration in seconds to human-readable string
+fn format_duration(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    } else {
+        format!(
+            "{}h {}m {}s",
+            seconds / 3600,
+            (seconds % 3600) / 60,
+            seconds % 60
+        )
     }
 }
 

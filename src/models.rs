@@ -226,6 +226,19 @@ pub struct WorkflowSummary {
     pub last_execution: Option<DateTime<Utc>>,
 }
 
+/// Detailed workflow execution statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowStatistics {
+    pub total_executions: i64,
+    pub success_count: i64,
+    pub failed_count: i64,
+    pub success_rate: f64, // Percentage (0-100)
+    pub failure_rate: f64, // Percentage (0-100)
+    pub avg_duration_seconds: Option<f64>,
+    pub last_24h_count: i64,
+    pub last_execution: Option<DateTime<Utc>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

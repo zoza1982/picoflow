@@ -1,0 +1,64 @@
+name: parallel-workflow
+description: "Test workflow with parallel task execution"
+
+config:
+  max_parallel: 4
+  retry_default: 1
+  timeout_default: 30
+
+tasks:
+  # Level 0: No dependencies - runs first
+  - name: init
+    type: shell
+    config:
+      command: "/bin/echo"
+      args: ["Starting workflow"]
+    retry: 0
+    timeout: 10
+
+  # Level 1: Depends on init - these 4 tasks run in parallel
+  - name: parallel_task_1
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 1 starting' && sleep 2 && echo 'Task 1 complete'"]
+    retry: 0
+    timeout: 10
+
+  - name: parallel_task_2
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 2 starting' && sleep 2 && echo 'Task 2 complete'"]
+    retry: 0
+    timeout: 10
+
+  - name: parallel_task_3
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 3 starting' && sleep 2 && echo 'Task 3 complete'"]
+    retry: 0
+    timeout: 10
+
+  - name: parallel_task_4
+    type: shell
+    depends_on: [init]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Task 4 starting' && sleep 2 && echo 'Task 4 complete'"]
+    retry: 0
+    timeout: 10
+
+  # Level 2: Depends on all parallel tasks - runs last
+  - name: finalize
+    type: shell
+    depends_on: [parallel_task_1, parallel_task_2, parallel_task_3, parallel_task_4]
+    config:
+      command: "/bin/echo"
+      args: ["All tasks complete"]
+    retry: 0
+    timeout: 10
