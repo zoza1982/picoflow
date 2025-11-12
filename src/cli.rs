@@ -56,6 +56,18 @@ pub enum Commands {
         #[arg(long, default_value = "10")]
         limit: usize,
     },
+
+    /// Workflow management commands
+    Workflow {
+        #[command(subcommand)]
+        command: WorkflowCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WorkflowCommands {
+    /// List all workflows with execution statistics
+    List,
 }
 
 impl Cli {
@@ -86,6 +98,9 @@ impl Cli {
             }
             Commands::Status { workflow, limit } => {
                 self.show_status(workflow.as_deref(), *limit)?;
+            }
+            Commands::Workflow { command } => {
+                self.handle_workflow_command(command)?;
             }
         }
         Ok(())
@@ -198,6 +213,47 @@ impl Cli {
 
         Ok(())
     }
+
+    /// Handle workflow management commands
+    fn handle_workflow_command(&self, command: &WorkflowCommands) -> anyhow::Result<()> {
+        match command {
+            WorkflowCommands::List => self.list_workflows()?,
+        }
+        Ok(())
+    }
+
+    /// List all workflows with execution statistics
+    fn list_workflows(&self) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path)?;
+        let workflows = state_manager.list_workflows()?;
+
+        if workflows.is_empty() {
+            println!("No workflows found");
+            return Ok(());
+        }
+
+        println!("Workflows:");
+        println!();
+        println!(
+            "{:<30} {:<15} {}",
+            "Name", "Executions", "Last Execution"
+        );
+        println!("{}", "-".repeat(80));
+
+        for workflow in workflows {
+            let last_exec = workflow
+                .last_execution
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "Never".to_string());
+
+            println!(
+                "{:<30} {:<15} {}",
+                workflow.name, workflow.execution_count, last_exec
+            );
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +294,16 @@ mod tests {
             "test.yaml",
         ]);
         assert_eq!(cli.db_path, PathBuf::from("/tmp/test.db"));
+    }
+
+    #[test]
+    fn test_cli_workflow_list() {
+        let cli = Cli::parse_from(["picoflow", "workflow", "list"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Workflow {
+                command: WorkflowCommands::List
+            }
+        ));
     }
 }

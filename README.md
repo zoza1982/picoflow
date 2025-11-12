@@ -90,11 +90,14 @@ picoflow validate backup-workflow.yaml
 # Run once
 picoflow run backup-workflow.yaml
 
+# List all workflows
+picoflow workflow list
+
+# Check status of a specific workflow
+picoflow status --workflow backup-workflow
+
 # Run in daemon mode (with scheduling)
 picoflow daemon backup-workflow.yaml
-
-# Check status
-picoflow status
 
 # View logs
 picoflow logs --workflow backup-workflow --task backup_database

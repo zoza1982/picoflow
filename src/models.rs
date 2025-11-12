@@ -215,6 +215,14 @@ pub struct TaskExecution {
     pub next_retry_at: Option<DateTime<Utc>>,
 }
 
+/// Workflow summary with execution statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowSummary {
+    pub name: String,
+    pub execution_count: i64,
+    pub last_execution: Option<DateTime<Utc>>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

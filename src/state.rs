@@ -1,7 +1,7 @@
 //! SQLite-based state management for workflow executions
 
 use crate::error::Result;
-use crate::models::{TaskExecution, TaskStatus, WorkflowExecution};
+use crate::models::{TaskExecution, TaskStatus, WorkflowExecution, WorkflowSummary};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
@@ -499,6 +499,59 @@ impl StateManager {
 
         Ok(executions)
     }
+
+    /// List all workflows with their execution statistics.
+    ///
+    /// Returns workflow information including name, total executions, and last execution time.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<WorkflowSummary>)` - List of workflows with statistics
+    ///
+    /// # Errors
+    ///
+    /// * `PicoFlowError::Database` - If database query fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use picoflow::state::StateManager;
+    /// let manager = StateManager::new("/var/lib/picoflow/state.db")?;
+    /// let workflows = manager.list_workflows()?;
+    /// for workflow in workflows {
+    ///     println!("{}: {} executions", workflow.name, workflow.execution_count);
+    /// }
+    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// ```
+    pub fn list_workflows(&self) -> Result<Vec<WorkflowSummary>> {
+        let conn = self.lock_conn()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT
+                w.name,
+                COUNT(e.id) as execution_count,
+                MAX(e.started_at) as last_execution
+             FROM workflows w
+             LEFT JOIN executions e ON w.id = e.workflow_id
+             GROUP BY w.id, w.name
+             ORDER BY last_execution DESC NULLS LAST",
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(WorkflowSummary {
+                name: row.get(0)?,
+                execution_count: row.get(1)?,
+                last_execution: row.get(2)?,
+            })
+        })?;
+
+        let mut workflows = Vec::new();
+        for row in rows {
+            workflows.push(row?);
+        }
+
+        Ok(workflows)
+    }
 }
 
 fn parse_task_status(s: &str) -> TaskStatus {
@@ -646,5 +699,58 @@ mod tests {
 
         let history = manager.get_execution_history("test", 3).unwrap();
         assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    fn test_list_workflows() {
+        let manager = StateManager::in_memory().unwrap();
+
+        // Create multiple workflows with different execution counts
+        let wf1_id = manager.get_or_create_workflow("workflow-alpha").unwrap();
+        let wf2_id = manager.get_or_create_workflow("workflow-beta").unwrap();
+        let wf3_id = manager.get_or_create_workflow("workflow-gamma").unwrap();
+
+        // workflow-alpha: 3 executions
+        for _ in 0..3 {
+            let exec_id = manager.start_execution(wf1_id).unwrap();
+            manager
+                .update_execution_status(exec_id, TaskStatus::Success)
+                .unwrap();
+        }
+
+        // workflow-beta: 1 execution
+        let exec_id = manager.start_execution(wf2_id).unwrap();
+        manager
+            .update_execution_status(exec_id, TaskStatus::Success)
+            .unwrap();
+
+        // workflow-gamma: 0 executions (just created)
+
+        // List all workflows
+        let workflows = manager.list_workflows().unwrap();
+        assert_eq!(workflows.len(), 3);
+
+        // Find each workflow in the list
+        let alpha = workflows
+            .iter()
+            .find(|w| w.name == "workflow-alpha")
+            .unwrap();
+        let beta = workflows
+            .iter()
+            .find(|w| w.name == "workflow-beta")
+            .unwrap();
+        let gamma = workflows
+            .iter()
+            .find(|w| w.name == "workflow-gamma")
+            .unwrap();
+
+        assert_eq!(alpha.execution_count, 3);
+        assert!(alpha.last_execution.is_some());
+
+        assert_eq!(beta.execution_count, 1);
+        assert!(beta.last_execution.is_some());
+
+        assert_eq!(gamma.execution_count, 0);
+        assert!(gamma.last_execution.is_none());
     }
 }
