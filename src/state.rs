@@ -530,6 +530,8 @@ impl StateManager {
             "SELECT
                 w.name,
                 COUNT(e.id) as execution_count,
+                SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
                 MAX(e.started_at) as last_execution
              FROM workflows w
              LEFT JOIN executions e ON w.id = e.workflow_id
@@ -541,7 +543,9 @@ impl StateManager {
             Ok(WorkflowSummary {
                 name: row.get(0)?,
                 execution_count: row.get(1)?,
-                last_execution: row.get(2)?,
+                success_count: row.get(2)?,
+                failed_count: row.get(3)?,
+                last_execution: row.get(4)?,
             })
         })?;
 
@@ -710,7 +714,7 @@ mod tests {
         let wf2_id = manager.get_or_create_workflow("workflow-beta").unwrap();
         let wf3_id = manager.get_or_create_workflow("workflow-gamma").unwrap();
 
-        // workflow-alpha: 3 executions
+        // workflow-alpha: 3 successful executions
         for _ in 0..3 {
             let exec_id = manager.start_execution(wf1_id).unwrap();
             manager
@@ -718,10 +722,16 @@ mod tests {
                 .unwrap();
         }
 
-        // workflow-beta: 1 execution
+        // workflow-beta: 2 successful, 1 failed
+        for _ in 0..2 {
+            let exec_id = manager.start_execution(wf2_id).unwrap();
+            manager
+                .update_execution_status(exec_id, TaskStatus::Success)
+                .unwrap();
+        }
         let exec_id = manager.start_execution(wf2_id).unwrap();
         manager
-            .update_execution_status(exec_id, TaskStatus::Success)
+            .update_execution_status(exec_id, TaskStatus::Failed)
             .unwrap();
 
         // workflow-gamma: 0 executions (just created)
@@ -744,13 +754,22 @@ mod tests {
             .find(|w| w.name == "workflow-gamma")
             .unwrap();
 
+        // Verify workflow-alpha stats
         assert_eq!(alpha.execution_count, 3);
+        assert_eq!(alpha.success_count, 3);
+        assert_eq!(alpha.failed_count, 0);
         assert!(alpha.last_execution.is_some());
 
-        assert_eq!(beta.execution_count, 1);
+        // Verify workflow-beta stats
+        assert_eq!(beta.execution_count, 3);
+        assert_eq!(beta.success_count, 2);
+        assert_eq!(beta.failed_count, 1);
         assert!(beta.last_execution.is_some());
 
+        // Verify workflow-gamma stats
         assert_eq!(gamma.execution_count, 0);
+        assert_eq!(gamma.success_count, 0);
+        assert_eq!(gamma.failed_count, 0);
         assert!(gamma.last_execution.is_none());
     }
 }

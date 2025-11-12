@@ -235,10 +235,10 @@ impl Cli {
         println!("Workflows:");
         println!();
         println!(
-            "{:<30} {:<15} {}",
-            "Name", "Executions", "Last Execution"
+            "{:<30} {:<12} {:<10} {:<10} {}",
+            "Name", "Total", "Success", "Failed", "Last Execution"
         );
-        println!("{}", "-".repeat(80));
+        println!("{}", "-".repeat(100));
 
         for workflow in workflows {
             let last_exec = workflow
@@ -247,8 +247,12 @@ impl Cli {
                 .unwrap_or_else(|| "Never".to_string());
 
             println!(
-                "{:<30} {:<15} {}",
-                workflow.name, workflow.execution_count, last_exec
+                "{:<30} {:<12} {:<10} {:<10} {}",
+                workflow.name,
+                workflow.execution_count,
+                workflow.success_count,
+                workflow.failed_count,
+                last_exec
             );
         }
 

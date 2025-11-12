@@ -220,6 +220,8 @@ pub struct TaskExecution {
 pub struct WorkflowSummary {
     pub name: String,
     pub execution_count: i64,
+    pub success_count: i64,
+    pub failed_count: i64,
     pub last_execution: Option<DateTime<Utc>>,
 }
 
