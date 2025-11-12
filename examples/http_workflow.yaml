@@ -1,0 +1,68 @@
+name: api-health-check
+description: "Monitor API health endpoints with HTTP executor"
+
+config:
+  max_parallel: 4
+  retry_default: 2
+  timeout_default: 30
+
+tasks:
+  # Health check for main API
+  - name: check_api_health
+    type: http
+    config:
+      url: "https://jsonplaceholder.typicode.com/posts/1"
+      method: GET
+      timeout: 10
+    retry: 1
+
+  # Create resource via POST
+  - name: create_post
+    type: http
+    depends_on: [check_api_health]
+    config:
+      url: "https://jsonplaceholder.typicode.com/posts"
+      method: POST
+      body:
+        title: "Test Post from PicoFlow"
+        body: "This is a test post created by PicoFlow HTTP executor"
+        userId: 1
+      headers:
+        Content-Type: "application/json"
+      timeout: 15
+    retry: 2
+
+  # Update resource via PUT
+  - name: update_post
+    type: http
+    depends_on: [create_post]
+    config:
+      url: "https://jsonplaceholder.typicode.com/posts/1"
+      method: PUT
+      body:
+        id: 1
+        title: "Updated Post Title"
+        body: "Updated content from PicoFlow"
+        userId: 1
+      headers:
+        Content-Type: "application/json"
+      timeout: 15
+
+  # Delete resource
+  - name: delete_post
+    type: http
+    depends_on: [update_post]
+    config:
+      url: "https://jsonplaceholder.typicode.com/posts/1"
+      method: DELETE
+      timeout: 10
+    continue_on_failure: true
+
+  # Verify with another GET (should be independent)
+  - name: verify_api_status
+    type: http
+    depends_on: [check_api_health]
+    config:
+      url: "https://jsonplaceholder.typicode.com/users/1"
+      method: GET
+      timeout: 10

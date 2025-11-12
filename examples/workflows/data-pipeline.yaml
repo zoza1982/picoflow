@@ -137,7 +137,9 @@ tasks:
       timeout: 30
     retry: 3
 
-  # Step 7: Actually transfer the file using shell + scp
+  # Step 7: Transfer the file using shell + scp
+  # SECURITY: Ensure SSH host key is in ~/.ssh/known_hosts before running
+  # Run: ssh-keyscan -H ${STORAGE_HOST} >> ~/.ssh/known_hosts
   - name: transfer_file
     type: shell
     depends_on: [upload_to_storage]
@@ -146,8 +148,6 @@ tasks:
       args:
         - "-i"
         - "${SSH_KEY_PATH}"
-        - "-o"
-        - "StrictHostKeyChecking=no"
         - "/tmp/picoflow_sensor_data.json.gz"
         - "${STORAGE_USER}@${STORAGE_HOST}:/data/iot/$(date +%Y/%m/%d)/${DEVICE_ID}_$(date +%Y%m%d_%H%M%S).json.gz"
       timeout: 60

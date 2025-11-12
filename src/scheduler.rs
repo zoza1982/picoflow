@@ -2,6 +2,7 @@
 
 use crate::dag::DagEngine;
 use crate::error::Result;
+use crate::executors::http::HttpExecutor;
 use crate::executors::shell::ShellExecutor;
 use crate::executors::ssh::SshExecutor;
 use crate::executors::ExecutorTrait;
@@ -20,6 +21,7 @@ pub struct TaskScheduler {
     state_manager: Arc<StateManager>,
     shell_executor: ShellExecutor,
     ssh_executor: SshExecutor,
+    http_executor: HttpExecutor,
 }
 
 impl TaskScheduler {
@@ -29,6 +31,7 @@ impl TaskScheduler {
             state_manager,
             shell_executor: ShellExecutor::new(),
             ssh_executor: SshExecutor::new(),
+            http_executor: HttpExecutor::new(),
         }
     }
 
@@ -184,6 +187,7 @@ impl TaskScheduler {
                 let state_manager = self.state_manager.clone();
                 let shell_executor = self.shell_executor.clone();
                 let ssh_executor = self.ssh_executor.clone();
+                let http_executor = self.http_executor.clone();
 
                 // Spawn task execution
                 let handle = tokio::spawn(async move {
@@ -212,6 +216,7 @@ impl TaskScheduler {
                         state_manager,
                         shell_executor,
                         ssh_executor,
+                        http_executor,
                     };
 
                     // Execute task with retry logic
@@ -379,9 +384,7 @@ impl TaskScheduler {
             match task.task_type {
                 crate::models::TaskType::Shell => self.shell_executor.execute(&task.config).await,
                 crate::models::TaskType::Ssh => self.ssh_executor.execute(&task.config).await,
-                crate::models::TaskType::Http => {
-                    Err(anyhow::anyhow!("HTTP executor not yet implemented"))
-                }
+                crate::models::TaskType::Http => self.http_executor.execute(&task.config).await,
             }
         };
 

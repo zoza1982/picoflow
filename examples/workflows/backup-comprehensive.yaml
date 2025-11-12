@@ -140,9 +140,10 @@ tasks:
           REMOTE_FILE="${BACKUP_DIR}/postgres_${DB_NAME}_${TIMESTAMP}.sql.gz"
 
           # Transfer using scp with compression
+          # SECURITY: Ensure SSH host keys are in ~/.ssh/known_hosts before running
+          # Run: ssh-keyscan -H ${BACKUP_HOST} >> ~/.ssh/known_hosts
           scp -C \
             -i "${SSH_KEY_PATH}" \
-            -o StrictHostKeyChecking=no \
             "${DB_USER}@${DB_HOST}:/tmp/postgres_backup_*.sql.gz" \
             "${BACKUP_USER}@${BACKUP_HOST}:${REMOTE_FILE}"
 
