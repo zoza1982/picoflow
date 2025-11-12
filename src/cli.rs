@@ -279,7 +279,11 @@ impl Cli {
         for workflow in workflows {
             let last_exec = workflow
                 .last_execution
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .map(|dt| {
+                    // Convert UTC to local timezone
+                    let local_time = dt.with_timezone(&chrono::Local);
+                    local_time.format("%Y-%m-%d %H:%M:%S").to_string()
+                })
                 .unwrap_or_else(|| "Never".to_string());
 
             println!(

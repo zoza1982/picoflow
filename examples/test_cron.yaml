@@ -1,0 +1,31 @@
+name: quick-test-workflow
+description: "Test cron scheduler - runs every 30 seconds"
+schedule: "*/30 * * * * *"  # Every 30 seconds (6-field: sec min hour day month dayofweek)
+
+config:
+  max_parallel: 1
+  retry_default: 1
+  timeout_default: 30
+
+tasks:
+  - name: show_timestamp
+    type: shell
+    config:
+      command: "/bin/date"
+      args: ["+%Y-%m-%d %H:%M:%S"]
+    timeout: 5
+
+  - name: show_uptime
+    type: shell
+    depends_on: [show_timestamp]
+    config:
+      command: "/usr/bin/uptime"
+    timeout: 5
+
+  - name: confirm
+    type: shell
+    depends_on: [show_uptime]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Cron workflow executed successfully!' >> /tmp/message.txt"]
+    timeout: 5
