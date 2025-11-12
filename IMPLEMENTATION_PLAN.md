@@ -577,76 +577,121 @@ picoflow status --workflow simple-workflow
 
 ### Phase 5: Docker & Web UI (v1.1) - Future
 
-**Goal:** Enhanced executor capabilities and optional monitoring UI
+**Goal:** Optional containerized execution and monitoring UI
 
 **Estimated Duration:** 4 weeks
 
 ### Tasks
 
-- [ ] Docker executor (`src/executors/docker.rs`)
+- [ ] Docker executor (`src/executors/docker.rs`) - **FEATURE-GATED**
+  - [ ] Add `docker` feature flag to Cargo.toml
   - [ ] Execute commands inside Docker containers
   - [ ] Support docker run, docker exec
-  - [ ] Volume mounting configuration
-  - [ ] Network configuration
-  - [ ] Container cleanup after execution
+  - [ ] Volume mounting configuration (read-only by default)
+  - [ ] Network configuration (bridge mode)
+  - [ ] Container cleanup after execution (always)
   - [ ] Integration with Docker API (bollard crate)
   - [ ] Unit tests with mock Docker daemon
+  - [ ] Documentation: NOT recommended for Pi Zero 2 W
+  - [ ] Memory monitoring: Warn if Docker daemon not running
+  - [ ] Timeout handling for container operations
 
 - [ ] Read-only Web UI (`src/webui/`)
-  - [ ] Lightweight HTTP server (axum or actix-web)
-  - [ ] DAG visualization (SVG/Canvas rendering)
-  - [ ] Execution history browser
-  - [ ] Live workflow status view
-  - [ ] Task log viewer
-  - [ ] Read-only design (no editing/triggering)
-  - [ ] Optional/disabled by default
-  - [ ] Target: <5MB additional memory overhead
-  - [ ] Static asset embedding (no external files)
+  - [ ] Lightweight HTTP server using **axum** (better tokio integration)
+  - [ ] Server-side SVG DAG rendering (no client-side rendering)
+  - [ ] Polling-based status updates (every 2s, configurable)
+  - [ ] Execution history browser with pagination (20 per page)
+  - [ ] Task log viewer with streaming (last 1000 lines)
+  - [ ] Read-only design (no editing/triggering workflows)
+  - [ ] Optional/disabled by default (--enable-webui flag)
+  - [ ] Port configuration (default: 8080, via --webui-port)
+  - [ ] Static asset embedding with `include_str!` macro
+  - [ ] Minimal vanilla JavaScript (no frameworks)
+  - [ ] CSS with minimal footprint (<10KB)
+  - [ ] CORS configuration for local access
+  - [ ] Graceful degradation if UI disabled
+  - [ ] Target: <12MB additional memory overhead
 
-- [ ] Enhanced features
-  - [ ] Task data passing via JSON files
-  - [ ] Workflow parameterization at runtime
-  - [ ] Environment variable templating
-  - [ ] Conditional task execution (basic)
+- [ ] Task data passing
+  - [ ] Capture task stdout/stderr to JSON files
+  - [ ] Store in `.picoflow/outputs/<workflow_id>/<task_name>.json`
+  - [ ] Size limit: 10MB per task output
+  - [ ] Automatic cleanup after workflow completion
+  - [ ] Parse JSON for downstream task access
+  - [ ] Error handling for malformed JSON
 
 **Exit Criteria:**
-- [ ] Docker executor works with common use cases
-- [ ] Web UI accessible on configurable port (default: 8080)
-- [ ] UI memory overhead <5MB
-- [ ] Documentation for Docker tasks and Web UI
+- [ ] Docker executor works with common images (alpine, ubuntu)
+- [ ] Docker feature can be disabled at compile time
+- [ ] Web UI accessible on configurable port
+- [ ] Web UI renders DAGs correctly (tested with 100-task DAG)
+- [ ] UI memory overhead <12MB (measured with `ps`)
+- [ ] Polling updates work without WebSocket complexity
+- [ ] Documentation covers Docker limitations and Web UI setup
+- [ ] Security considerations documented (no auth, local-only)
 - [ ] All tests passing
-- [ ] Binary size <15MB (acceptable growth for optional features)
+- [ ] Binary size <18MB stripped (without docker feature)
+- [ ] Binary size <20MB stripped (with docker feature)
 
 ---
 
 ### Phase 6: Advanced Workflows (v1.2) - Future
 
-**Goal:** Dynamic DAGs and conditional execution
+**Goal:** Conditional execution and parameterized task iteration
 
 **Estimated Duration:** 6 weeks
 
 ### Tasks
 
-- [ ] Conditional execution
-  - [ ] Task conditions based on previous task results
-  - [ ] Skip tasks based on conditions
-  - [ ] Branching logic in workflows
+- [ ] Conditional execution (`src/dag/conditions.rs`)
+  - [ ] Evaluate task exit codes for conditionals
+  - [ ] Implement `on_success` / `on_failure` task dependencies
+  - [ ] Skip tasks based on conditions (update task state machine)
+  - [ ] Condition DSL: Simple exit code checks (not full expression language)
+  - [ ] Performance target: <10ms per condition evaluation
+  - [ ] Unit tests for all conditional branches
+  - [ ] Integration tests with real workflows
 
-- [ ] Dynamic DAGs
-  - [ ] Generate tasks at runtime based on data
-  - [ ] Loop constructs for task repetition
-  - [ ] Template-based task generation
+- [ ] Loop constructs (`src/dag/loops.rs`)
+  - [ ] Iterate over task lists (YAML array syntax)
+  - [ ] Max iteration limit: 1000 (configurable via workflow config)
+  - [ ] Loop timeout calculation: task_timeout * iterations
+  - [ ] Memory tracking for accumulated task states
+  - [ ] Loop variable substitution in task configs
+  - [ ] Break/continue on task failure (configurable)
+  - [ ] Performance target: <100ms to generate 100 loop iterations
 
-- [ ] Enhanced data passing
-  - [ ] Rich JSON data between tasks
-  - [ ] Built-in templating engine (Tera or Handlebars)
-  - [ ] Output artifacts and caching
+- [ ] Environment variable templating (`src/config/template.rs`)
+  - [ ] Simple variable substitution: `${VAR_NAME}`
+  - [ ] Task output reference: `${TASK_NAME.field}` (JSON path)
+  - [ ] Built-in variables: `${WORKFLOW_ID}`, `${TASK_NAME}`, `${TIMESTAMP}`
+  - [ ] Use lightweight string formatting (consider `strfmt` crate ~50KB)
+  - [ ] NO complex logic (no if/else, loops in templates)
+  - [ ] Performance target: <20ms for 100 variable substitutions
+  - [ ] Escape sequences for literal `${}`
+
+- [ ] Output artifacts (`src/storage/artifacts.rs`)
+  - [ ] JSON output parsing and validation
+  - [ ] Artifact storage with size limits (10MB per task)
+  - [ ] Retention policy: Max 100 artifacts or 1GB total
+  - [ ] Automatic cleanup on workflow completion
+  - [ ] Artifact query API for downstream tasks
+  - [ ] Error handling for malformed outputs
+  - [ ] SQLite storage for artifact metadata
 
 **Exit Criteria:**
-- [ ] Conditional workflows work correctly
-- [ ] Dynamic task generation functional
-- [ ] Performance targets still met
-- [ ] Comprehensive examples
+- [ ] Conditional workflows execute correctly (exit code based)
+- [ ] Loop constructs work with 1000 iterations
+- [ ] Template substitution works with task outputs
+- [ ] Artifact storage respects size limits
+- [ ] Performance targets met:
+  - [ ] Condition evaluation: <10ms
+  - [ ] Loop generation: <100ms for 100 tasks
+  - [ ] Template substitution: <20ms for 100 vars
+- [ ] Memory: <60MB with 10 parallel tasks
+- [ ] Binary size: <20MB stripped
+- [ ] Comprehensive examples (conditional workflow, loop workflow)
+- [ ] Documentation updated with new YAML syntax
 
 ---
 

@@ -209,6 +209,9 @@
 | SEC-002 | Secrets management | P1 | Env vars or file refs, no plaintext |
 | SEC-003 | Read-only filesystem support | P2 | For immutable infrastructure |
 | SEC-004 | User/group isolation | P1 | Run tasks as specific user |
+| SEC-005 | Docker socket access control | P1 | v1.1: Unix socket permissions, no TCP |
+| SEC-006 | Web UI local-only binding | P1 | v1.1: No authentication, localhost only |
+| SEC-007 | Task output size limits | P1 | v1.1: Prevent DoS via large outputs |
 
 ### 6.4 Compatibility
 
@@ -570,32 +573,55 @@ Acceptance Criteria:
 #### Phase 5: Docker & Web UI (v1.1)
 **Duration:** 4 weeks
 **Goals:**
-- Docker executor for containerized task execution
+- Docker executor for containerized task execution (optional feature)
 - Read-only Web UI for workflow visualization and monitoring
-- Enhanced workflow parameterization
-- Task data passing via JSON
+- Basic task data passing via JSON files
 
 **Key Features:**
-- Docker container execution (bollard crate integration)
+- Docker container execution (bollard crate, **feature-gated**)
+  - WARNING: Not recommended for Pi Zero 2 W (Docker daemon overhead)
+  - Requires Docker daemon running (adds ~100MB memory baseline)
 - Lightweight Web UI on port 8080 (optional, disabled by default)
-- DAG visualization with SVG/Canvas rendering
-- Live execution status and history browser
-- Memory target: <5MB additional overhead for UI
-- Binary size target: <15MB (acceptable for optional features)
+  - Server-side SVG DAG rendering (no heavy JS frameworks)
+  - Polling-based status updates (not WebSocket, simpler implementation)
+  - Static HTML + minimal vanilla JS, embedded with `include_str!`
+  - Execution history browser with pagination
+- Task output capture to JSON files (size limit: 10MB per task)
+- Memory target: <12MB additional overhead for UI (realistic for functional UI)
+- Binary size target: <18MB stripped (with Docker feature: <20MB)
 
 #### Phase 6: Advanced Workflows (v1.2)
 **Duration:** 6 weeks
 **Goals:**
-- Conditional task execution based on results
-- Dynamic DAG generation at runtime
-- Rich data passing between tasks
-- Template-based workflow generation
+- Conditional task execution based on exit codes and outputs
+- Parameterized task iteration (loop constructs)
+- Enhanced workflow parameterization (env var templating)
+- Output artifacts with size constraints
 
 **Key Features:**
-- Branching logic and task conditions
-- Loop constructs for task repetition
-- Built-in templating engine (Tera/Handlebars)
-- Output artifacts and caching
+- Conditional task execution:
+  - Skip tasks based on previous task exit codes
+  - Simple branching: `on_success`, `on_failure` task dependencies
+  - Condition evaluation: <10ms per condition
+- Loop constructs for task repetition:
+  - Iterate over lists (max 1000 iterations, configurable)
+  - Loop timeout: task_timeout * max_iterations
+  - Memory tracking for accumulated task states
+- Lightweight env var templating (NOT full template engine):
+  - Simple variable substitution: `${VAR_NAME}`, `${TASK_OUTPUT.field}`
+  - No complex logic in templates (keep edge-device simple)
+  - Consider `strfmt` crate (~50KB) instead of Tera/Handlebars
+- Output artifacts:
+  - JSON output capture (size limit: 10MB per task)
+  - Artifact retention policy (max 100 artifacts or 1GB total)
+  - Automatic cleanup of old artifacts
+
+**Performance Targets:**
+- Conditional evaluation: <10ms per condition
+- Loop generation: <100ms for 100 iterations
+- Template substitution: <20ms for 100 variables
+- Memory: <60MB with 10 parallel tasks (updated baseline)
+- Binary size: <20MB stripped
 
 #### Phase 7: Distributed Execution (v2.0)
 **Duration:** 12 weeks
@@ -604,13 +630,24 @@ Acceptance Criteria:
 - High availability and fault tolerance
 - Linear scalability across nodes
 
+**IMPORTANT NOTE:** This phase represents a fundamental architecture shift from single-node edge devices to distributed clusters. The memory and binary size targets will necessarily increase. This phase targets **cluster deployments** (3+ nodes), not individual Pi Zero devices.
+
 **Key Features:**
 - Leader/worker node architecture
-- gRPC inter-node communication
-- Raft consensus for leader election
-- Optional PostgreSQL backend for shared state
-- Distributed task queue
+  - Leader node: Workflow scheduling and coordination
+  - Worker nodes: Task execution (can be Pi devices)
+- gRPC inter-node communication (with mTLS)
+- Raft consensus for leader election (etcd or tikv)
+- Optional PostgreSQL backend for shared state (replaces SQLite)
+- Distributed task queue with work stealing
 - Node health monitoring and failover
+- Worker resource negotiation (CPU, memory limits)
+
+**Performance Targets (Updated for Distributed Mode):**
+- Leader node: <100MB memory, <30MB binary
+- Worker node: Maintain <50MB memory for task execution
+- Network overhead: <1ms task assignment latency (local network)
+- Failover time: <10s for leader election
 
 #### Phase 8: Plugin System (v2.1+)
 **Future considerations:**
