@@ -1,0 +1,253 @@
+name: iot-data-pipeline
+description: "IoT sensor data collection, processing, and upload pipeline"
+schedule: "*/10 * * * *"  # Every 10 minutes
+
+config:
+  max_parallel: 2
+  retry_default: 3
+  timeout_default: 120
+
+tasks:
+  # Step 1: Collect sensor data from local IoT API
+  - name: collect_temperature_data
+    type: http
+    config:
+      url: "http://localhost:8080/api/sensors/temperature"
+      method: GET
+      headers:
+        X-API-Key: "${IOT_API_KEY}"
+      timeout: 15
+    retry: 2
+    # Local API, should respond quickly
+
+  # Step 2: Collect humidity data (runs in parallel with temperature)
+  - name: collect_humidity_data
+    type: http
+    config:
+      url: "http://localhost:8080/api/sensors/humidity"
+      method: GET
+      headers:
+        X-API-Key: "${IOT_API_KEY}"
+      timeout: 15
+    retry: 2
+
+  # Step 3: Collect pressure data (runs in parallel)
+  - name: collect_pressure_data
+    type: http
+    config:
+      url: "http://localhost:8080/api/sensors/pressure"
+      method: GET
+      headers:
+        X-API-Key: "${IOT_API_KEY}"
+      timeout: 15
+    retry: 2
+    continue_on_failure: true  # Pressure sensor might be optional
+
+  # Step 4: Parse and combine sensor data into JSON
+  - name: process_sensor_data
+    type: shell
+    depends_on: [collect_temperature_data, collect_humidity_data, collect_pressure_data]
+    config:
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - |
+          # Create timestamp
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Read sensor data from task outputs (simplified example)
+          # In production, outputs would be stored in temp files by PicoFlow
+
+          # Combine into single JSON file
+          cat > /tmp/picoflow_sensor_data.json <<EOF
+          {
+            "device_id": "${DEVICE_ID}",
+            "timestamp": "$TIMESTAMP",
+            "location": "${DEVICE_LOCATION}",
+            "sensors": {
+              "temperature": {
+                "value": 22.5,
+                "unit": "celsius"
+              },
+              "humidity": {
+                "value": 65.0,
+                "unit": "percent"
+              },
+              "pressure": {
+                "value": 1013.25,
+                "unit": "hPa"
+              }
+            },
+            "metadata": {
+              "firmware_version": "1.2.3",
+              "battery_level": 87
+            }
+          }
+          EOF
+
+          # Validate JSON syntax
+          if command -v jq >/dev/null 2>&1; then
+            jq empty /tmp/picoflow_sensor_data.json || exit 1
+          fi
+
+          echo "Sensor data processed and saved to /tmp/picoflow_sensor_data.json"
+    timeout: 30
+    retry: 1
+
+  # Step 5: Compress data for efficient transfer
+  - name: compress_data
+    type: shell
+    depends_on: [process_sensor_data]
+    config:
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - |
+          # Compress JSON data
+          gzip -c /tmp/picoflow_sensor_data.json > /tmp/picoflow_sensor_data.json.gz
+
+          # Verify compression
+          if [ ! -f /tmp/picoflow_sensor_data.json.gz ]; then
+            echo "Compression failed"
+            exit 1
+          fi
+
+          # Print compression stats
+          ORIGINAL_SIZE=$(stat -f%z /tmp/picoflow_sensor_data.json 2>/dev/null || stat -c%s /tmp/picoflow_sensor_data.json 2>/dev/null || echo 0)
+          COMPRESSED_SIZE=$(stat -f%z /tmp/picoflow_sensor_data.json.gz 2>/dev/null || stat -c%s /tmp/picoflow_sensor_data.json.gz 2>/dev/null || echo 0)
+
+          echo "Original: ${ORIGINAL_SIZE} bytes, Compressed: ${COMPRESSED_SIZE} bytes"
+    timeout: 20
+    retry: 1
+
+  # Step 6: Upload to remote storage via SSH
+  - name: upload_to_storage
+    type: ssh
+    depends_on: [compress_data]
+    config:
+      host: "${STORAGE_HOST}"
+      user: "${STORAGE_USER}"
+      command: |
+        # Create remote directory structure
+        mkdir -p /data/iot/$(date +%Y/%m/%d)
+
+        # Note: In production, file would be transferred via SCP/SFTP
+        # This is a placeholder showing the directory structure
+        echo "Ready to receive file at /data/iot/$(date +%Y/%m/%d)/${DEVICE_ID}_$(date +%Y%m%d_%H%M%S).json.gz"
+      timeout: 30
+    retry: 3
+
+  # Step 7: Actually transfer the file using shell + scp
+  - name: transfer_file
+    type: shell
+    depends_on: [upload_to_storage]
+    config:
+      command: "/usr/bin/scp"
+      args:
+        - "-i"
+        - "${SSH_KEY_PATH}"
+        - "-o"
+        - "StrictHostKeyChecking=no"
+        - "/tmp/picoflow_sensor_data.json.gz"
+        - "${STORAGE_USER}@${STORAGE_HOST}:/data/iot/$(date +%Y/%m/%d)/${DEVICE_ID}_$(date +%Y%m%d_%H%M%S).json.gz"
+      timeout: 60
+    retry: 3
+
+  # Step 8: Verify upload integrity
+  - name: verify_upload
+    type: ssh
+    depends_on: [transfer_file]
+    config:
+      host: "${STORAGE_HOST}"
+      user: "${STORAGE_USER}"
+      command: |
+        # Find the most recent file
+        LATEST_FILE=$(ls -t /data/iot/$(date +%Y/%m/%d)/${DEVICE_ID}_*.json.gz 2>/dev/null | head -1)
+
+        if [ -z "$LATEST_FILE" ]; then
+          echo "Error: Uploaded file not found"
+          exit 1
+        fi
+
+        # Verify file is not empty
+        FILE_SIZE=$(stat -c%s "$LATEST_FILE" 2>/dev/null || stat -f%z "$LATEST_FILE" 2>/dev/null)
+
+        if [ "$FILE_SIZE" -lt 100 ]; then
+          echo "Error: Uploaded file too small ($FILE_SIZE bytes)"
+          exit 1
+        fi
+
+        echo "Upload verified: $LATEST_FILE ($FILE_SIZE bytes)"
+      timeout: 30
+    retry: 1
+
+  # Step 9: Clean up local temporary files
+  - name: cleanup_temp_files
+    type: shell
+    depends_on: [verify_upload]
+    config:
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - |
+          # Remove temporary files
+          rm -f /tmp/picoflow_sensor_data.json
+          rm -f /tmp/picoflow_sensor_data.json.gz
+
+          echo "Cleanup completed"
+      timeout: 10
+    continue_on_failure: true  # Don't fail workflow if cleanup fails
+
+  # Step 10: Send success notification
+  - name: notify_success
+    type: http
+    depends_on: [verify_upload]
+    config:
+      url: "https://${MONITORING_HOST}/api/pipeline/status"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer ${MONITORING_TOKEN}"
+      body:
+        pipeline: "iot-data-pipeline"
+        device_id: "${DEVICE_ID}"
+        status: "success"
+        timestamp: "{{timestamp}}"
+        records_processed: 3
+      timeout: 15
+    retry: 2
+    continue_on_failure: true
+
+# Environment Variables Required:
+# - IOT_API_KEY: API key for local IoT sensor API
+# - DEVICE_ID: Unique identifier for this IoT device (e.g., rpi-zero-001)
+# - DEVICE_LOCATION: Physical location of device (e.g., warehouse-1, room-a)
+# - STORAGE_HOST: Remote storage server hostname
+# - STORAGE_USER: SSH username for remote storage
+# - SSH_KEY_PATH: Path to SSH private key (e.g., /home/pi/.ssh/id_rsa)
+# - MONITORING_HOST: Monitoring/notification service hostname
+# - MONITORING_TOKEN: Bearer token for monitoring API
+
+# Security Notes:
+# - Use SSH key-based authentication (no passwords)
+# - SSH keys should have restricted permissions (chmod 600)
+# - API keys should be rotated regularly
+# - Consider using SSH config file for host verification
+
+# Performance Notes:
+# - Parallel data collection (max_parallel: 2) reduces latency
+# - Data compression reduces network transfer time
+# - Total pipeline runtime: ~2-3 minutes
+# - Suitable for 10-minute scheduling interval
+# - Memory usage: <10MB for typical sensor data
+
+# Use Case:
+# This workflow is ideal for edge devices like Raspberry Pi collecting
+# sensor data in IoT deployments. Data is collected locally, processed,
+# and uploaded to central storage for analysis.
+
+# Example Hardware:
+# - Raspberry Pi Zero 2 W with temperature/humidity/pressure sensors
+# - Local network connection to sensor API
+# - Internet connection for remote upload
+# - 512MB RAM, sufficient for this lightweight pipeline

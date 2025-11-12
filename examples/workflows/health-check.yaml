@@ -1,0 +1,136 @@
+name: multi-service-health-monitoring
+description: "Multi-service health monitoring with automated notifications"
+schedule: "*/5 * * * *"  # Every 5 minutes
+
+config:
+  max_parallel: 3  # Check services in parallel
+  retry_default: 2
+  timeout_default: 30
+
+tasks:
+  # Check API service health
+  - name: check_api_health
+    type: http
+    config:
+      url: "https://${API_HOST}/health"
+      method: GET
+      headers:
+        Authorization: "Bearer ${API_HEALTH_TOKEN}"
+      timeout: 10
+    retry: 2
+    # API health checks should fail fast - no retries on timeout
+
+  # Check database connectivity
+  - name: check_database_health
+    type: http
+    config:
+      url: "https://${DB_PROXY_HOST}/health"
+      method: GET
+      headers:
+        X-API-Key: "${DB_HEALTH_API_KEY}"
+      timeout: 15
+    retry: 2
+    # Database health via HTTP proxy (e.g., pgbouncer metrics endpoint)
+
+  # Check Redis/cache service
+  - name: check_cache_health
+    type: http
+    config:
+      url: "https://${CACHE_HOST}/health"
+      method: GET
+      timeout: 10
+    retry: 2
+    continue_on_failure: true  # Cache failure shouldn't block notifications
+
+  # Check message queue health
+  - name: check_queue_health
+    type: http
+    config:
+      url: "https://${QUEUE_HOST}/api/health"
+      method: GET
+      headers:
+        Authorization: "Bearer ${QUEUE_API_TOKEN}"
+      timeout: 10
+    retry: 2
+    continue_on_failure: true
+
+  # Aggregate health status (runs after all checks complete)
+  - name: aggregate_status
+    type: shell
+    depends_on: [check_api_health, check_database_health, check_cache_health, check_queue_health]
+    config:
+      command: "/bin/sh"
+      args: ["-c", "echo 'Health checks completed at $(date +%Y-%m-%d_%H:%M:%S)' > /tmp/picoflow_health_status.log"]
+    timeout: 5
+    continue_on_failure: true
+
+  # Send success notification to monitoring webhook (only if all critical checks pass)
+  - name: notify_success
+    type: http
+    depends_on: [check_api_health, check_database_health]  # Only critical services
+    config:
+      url: "https://${WEBHOOK_HOST}/api/notify"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+        Authorization: "Bearer ${WEBHOOK_TOKEN}"
+      body:
+        status: "healthy"
+        service: "edge-device-${DEVICE_ID}"
+        timestamp: "{{timestamp}}"
+        message: "All critical services healthy"
+      timeout: 15
+    retry: 3
+    continue_on_failure: true  # Don't fail workflow if notification fails
+
+  # Send failure notification (only runs if API or DB check fails)
+  # NOTE: This requires conditional execution support (future feature)
+  # For now, this would be handled by monitoring the task execution history
+  - name: notify_failure
+    type: http
+    depends_on: [aggregate_status]
+    config:
+      url: "https://${SLACK_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        text: "🚨 Health check failed on ${DEVICE_ID}"
+        blocks:
+          - type: "section"
+            text:
+              type: "mrkdwn"
+              text: "*Health Check Alert*\n\nOne or more services failed health checks. Check PicoFlow logs for details."
+      timeout: 15
+    retry: 3
+    continue_on_failure: true
+
+# Environment Variables Required:
+# - API_HOST: API server hostname (e.g., api.example.com)
+# - API_HEALTH_TOKEN: Bearer token for API health endpoint
+# - DB_PROXY_HOST: Database proxy/health endpoint hostname
+# - DB_HEALTH_API_KEY: API key for database health checks
+# - CACHE_HOST: Redis/cache service hostname
+# - QUEUE_HOST: Message queue service hostname
+# - QUEUE_API_TOKEN: Bearer token for queue health endpoint
+# - WEBHOOK_HOST: Monitoring webhook hostname
+# - WEBHOOK_TOKEN: Authentication token for webhook
+# - SLACK_WEBHOOK_URL: Slack incoming webhook URL
+# - DEVICE_ID: Unique identifier for this edge device
+
+# Security Notes:
+# - All credentials should be passed via environment variables
+# - Never hardcode API keys or tokens in workflow files
+# - Use HTTPS for all endpoints
+# - Rotate tokens regularly
+
+# Performance Notes:
+# - Parallel execution of health checks (max_parallel: 3)
+# - Short timeouts (10-15s) to fail fast
+# - Total workflow runtime: ~20-30 seconds
+# - Suitable for 5-minute scheduling interval
+
+# Error Handling:
+# - API and database checks are critical (no continue_on_failure)
+# - Cache and queue checks are non-critical (continue_on_failure: true)
+# - Notifications have retries but won't block workflow completion

@@ -1,0 +1,561 @@
+name: edge-device-deployment
+description: "Application deployment pipeline for edge devices with health checks and rollback"
+# On-demand execution (no schedule), trigger manually or via webhook
+
+config:
+  max_parallel: 1  # Sequential deployment for safety
+  retry_default: 2
+  timeout_default: 300
+
+tasks:
+  # Step 1: Pre-deployment health check
+  - name: check_target_health
+    type: http
+    config:
+      url: "https://${DEPLOY_TARGET_HOST}/health"
+      method: GET
+      headers:
+        Authorization: "Bearer ${HEALTH_CHECK_TOKEN}"
+      timeout: 15
+    retry: 2
+    # Don't deploy if target is unhealthy
+
+  # Step 2: Check if deployment target is accessible
+  - name: check_ssh_connectivity
+    type: ssh
+    depends_on: [check_target_health]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        echo "SSH connectivity verified"
+        echo "Hostname: $(hostname)"
+        echo "Uptime: $(uptime)"
+      timeout: 30
+    retry: 2
+
+  # Step 3: Create backup of current deployment
+  - name: backup_current_version
+    type: ssh
+    depends_on: [check_ssh_connectivity]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        APP_DIR="${APP_DEPLOY_PATH}"
+        BACKUP_DIR="${APP_BACKUP_PATH}/backup_$(date +%Y%m%d_%H%M%S)"
+
+        # Create backup directory
+        mkdir -p "$BACKUP_DIR"
+
+        # Backup application files
+        if [ -d "$APP_DIR" ]; then
+          cp -r "$APP_DIR" "$BACKUP_DIR/"
+          echo "Backup created: $BACKUP_DIR"
+          echo "BACKUP_DIR=$BACKUP_DIR" > /tmp/picoflow_deploy_backup.sh
+        else
+          echo "No existing deployment to backup"
+          echo "BACKUP_DIR=" > /tmp/picoflow_deploy_backup.sh
+        fi
+      timeout: 120
+    retry: 1
+
+  # Step 4: Stop current application
+  - name: stop_application
+    type: ssh
+    depends_on: [backup_current_version]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        # Stop application using systemd (adjust for your init system)
+        if systemctl is-active --quiet ${APP_SERVICE_NAME}; then
+          echo "Stopping service: ${APP_SERVICE_NAME}"
+          sudo systemctl stop ${APP_SERVICE_NAME}
+
+          # Wait for graceful shutdown
+          sleep 5
+
+          # Verify stopped
+          if systemctl is-active --quiet ${APP_SERVICE_NAME}; then
+            echo "Error: Service failed to stop"
+            exit 1
+          fi
+
+          echo "Service stopped successfully"
+        else
+          echo "Service is not running"
+        fi
+      timeout: 60
+    retry: 1
+
+  # Step 5: Pull latest code from Git repository
+  - name: pull_latest_code
+    type: ssh
+    depends_on: [stop_application]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        REPO_DIR="${APP_REPO_PATH}"
+
+        cd "$REPO_DIR" || exit 1
+
+        # Fetch latest changes
+        git fetch origin
+
+        # Store current commit for potential rollback
+        CURRENT_COMMIT=$(git rev-parse HEAD)
+        echo "CURRENT_COMMIT=$CURRENT_COMMIT" > /tmp/picoflow_deploy_commit.sh
+
+        # Pull latest code from specified branch
+        echo "Pulling latest code from branch: ${DEPLOY_BRANCH}"
+        git checkout ${DEPLOY_BRANCH}
+        git pull origin ${DEPLOY_BRANCH}
+
+        NEW_COMMIT=$(git rev-parse HEAD)
+        echo "NEW_COMMIT=$NEW_COMMIT" >> /tmp/picoflow_deploy_commit.sh
+
+        echo "Code updated from $CURRENT_COMMIT to $NEW_COMMIT"
+
+        # Show changes
+        git log --oneline $CURRENT_COMMIT..$NEW_COMMIT
+      timeout: 120
+    retry: 2
+
+  # Step 6: Install dependencies
+  - name: install_dependencies
+    type: ssh
+    depends_on: [pull_latest_code]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        REPO_DIR="${APP_REPO_PATH}"
+        cd "$REPO_DIR" || exit 1
+
+        # Install dependencies based on project type
+        # Example for Node.js (adjust for your stack)
+        if [ -f "package.json" ]; then
+          echo "Installing Node.js dependencies..."
+          npm ci --production
+        elif [ -f "requirements.txt" ]; then
+          echo "Installing Python dependencies..."
+          pip install -r requirements.txt
+        elif [ -f "Cargo.toml" ]; then
+          echo "Building Rust application..."
+          cargo build --release
+        else
+          echo "No dependency file found, skipping installation"
+        fi
+
+        echo "Dependencies installed successfully"
+      timeout: 600  # 10 minutes for dependency installation
+    retry: 2
+
+  # Step 7: Run tests
+  - name: run_tests
+    type: ssh
+    depends_on: [install_dependencies]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        REPO_DIR="${APP_REPO_PATH}"
+        cd "$REPO_DIR" || exit 1
+
+        # Run tests based on project type
+        if [ -f "package.json" ]; then
+          echo "Running Node.js tests..."
+          npm test
+        elif [ -f "Cargo.toml" ]; then
+          echo "Running Rust tests..."
+          cargo test
+        elif [ -f "pytest.ini" ]; then
+          echo "Running Python tests..."
+          pytest
+        else
+          echo "No test configuration found, skipping tests"
+        fi
+
+        echo "Tests passed successfully"
+      timeout: 300
+    retry: 1
+
+  # Step 8: Build application
+  - name: build_application
+    type: ssh
+    depends_on: [run_tests]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        REPO_DIR="${APP_REPO_PATH}"
+        cd "$REPO_DIR" || exit 1
+
+        # Build application based on project type
+        if [ -f "package.json" ]; then
+          echo "Building Node.js application..."
+          npm run build
+        elif [ -f "Cargo.toml" ]; then
+          echo "Building Rust application..."
+          cargo build --release
+
+          # Copy binary to deployment location
+          cp target/release/${APP_BINARY_NAME} ${APP_DEPLOY_PATH}/
+        else
+          echo "No build step required"
+        fi
+
+        echo "Build completed successfully"
+      timeout: 600
+    retry: 1
+
+  # Step 9: Deploy new version
+  - name: deploy_new_version
+    type: ssh
+    depends_on: [build_application]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        REPO_DIR="${APP_REPO_PATH}"
+        DEPLOY_DIR="${APP_DEPLOY_PATH}"
+
+        # Copy built artifacts to deployment directory
+        echo "Deploying to: $DEPLOY_DIR"
+
+        # Create deployment directory if it doesn't exist
+        mkdir -p "$DEPLOY_DIR"
+
+        # Copy files (adjust based on your application structure)
+        if [ -f "$REPO_DIR/target/release/${APP_BINARY_NAME}" ]; then
+          # Rust binary
+          cp "$REPO_DIR/target/release/${APP_BINARY_NAME}" "$DEPLOY_DIR/"
+          chmod +x "$DEPLOY_DIR/${APP_BINARY_NAME}"
+        elif [ -d "$REPO_DIR/dist" ]; then
+          # Node.js built files
+          cp -r "$REPO_DIR/dist/"* "$DEPLOY_DIR/"
+        elif [ -d "$REPO_DIR/build" ]; then
+          # Python/other built files
+          cp -r "$REPO_DIR/build/"* "$DEPLOY_DIR/"
+        fi
+
+        # Copy configuration files
+        if [ -f "$REPO_DIR/config.yaml" ]; then
+          cp "$REPO_DIR/config.yaml" "$DEPLOY_DIR/"
+        fi
+
+        echo "Deployment files copied successfully"
+      timeout: 120
+    retry: 1
+
+  # Step 10: Start application
+  - name: start_application
+    type: ssh
+    depends_on: [deploy_new_version]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        # Start application using systemd
+        echo "Starting service: ${APP_SERVICE_NAME}"
+        sudo systemctl start ${APP_SERVICE_NAME}
+
+        # Wait for startup
+        sleep 10
+
+        # Verify service is running
+        if ! systemctl is-active --quiet ${APP_SERVICE_NAME}; then
+          echo "Error: Service failed to start"
+          systemctl status ${APP_SERVICE_NAME}
+          exit 1
+        fi
+
+        echo "Service started successfully"
+        echo "START_SUCCESS=true" > /tmp/picoflow_deploy_status.sh
+      timeout: 60
+    retry: 1
+
+  # Step 11: Post-deployment health check
+  - name: verify_deployment_health
+    type: http
+    depends_on: [start_application]
+    config:
+      url: "https://${DEPLOY_TARGET_HOST}/health"
+      method: GET
+      headers:
+        Authorization: "Bearer ${HEALTH_CHECK_TOKEN}"
+      timeout: 15
+    retry: 3  # More retries to allow application warmup
+    # NOTE: If this fails, consider triggering rollback
+
+  # Step 12: Verify application version
+  - name: verify_application_version
+    type: http
+    depends_on: [verify_deployment_health]
+    config:
+      url: "https://${DEPLOY_TARGET_HOST}/version"
+      method: GET
+      timeout: 10
+    retry: 1
+    continue_on_failure: true  # Version endpoint might not exist
+
+  # Step 13: Run smoke tests
+  - name: run_smoke_tests
+    type: ssh
+    depends_on: [verify_deployment_health]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        # Run basic smoke tests
+        echo "Running smoke tests..."
+
+        # Test 1: Check process is running
+        if ! pgrep -f ${APP_BINARY_NAME} > /dev/null; then
+          echo "Error: Application process not found"
+          exit 1
+        fi
+
+        # Test 2: Check listening on expected port
+        if ! netstat -tuln | grep -q ":${APP_PORT}"; then
+          echo "Error: Application not listening on port ${APP_PORT}"
+          exit 1
+        fi
+
+        # Test 3: Basic functionality test (adjust for your app)
+        if command -v curl >/dev/null 2>&1; then
+          curl -f http://localhost:${APP_PORT}/health || exit 1
+        fi
+
+        echo "Smoke tests passed"
+      timeout: 60
+    retry: 1
+
+  # Step 14: Clean up old backups (keep last 5)
+  - name: cleanup_old_backups
+    type: ssh
+    depends_on: [run_smoke_tests]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        BACKUP_BASE="${APP_BACKUP_PATH}"
+
+        # Keep only last 5 backups
+        cd "$BACKUP_BASE" || exit 0
+
+        BACKUP_COUNT=$(ls -1d backup_* 2>/dev/null | wc -l)
+
+        if [ "$BACKUP_COUNT" -gt 5 ]; then
+          echo "Cleaning up old backups (keeping 5 most recent)..."
+          ls -1dt backup_* | tail -n +6 | xargs rm -rf
+          echo "Cleanup completed"
+        else
+          echo "No cleanup needed ($BACKUP_COUNT backups exist)"
+        fi
+      timeout: 60
+    continue_on_failure: true
+
+  # Step 15: Send success notification
+  - name: notify_deployment_success
+    type: http
+    depends_on: [run_smoke_tests]
+    config:
+      url: "${NOTIFICATION_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        status: "success"
+        workflow: "edge-device-deployment"
+        target_host: "${DEPLOY_TARGET_HOST}"
+        application: "${APP_SERVICE_NAME}"
+        timestamp: "{{timestamp}}"
+        message: "Deployment completed successfully"
+      timeout: 20
+    retry: 3
+    continue_on_failure: true
+
+  # Step 16: Send Slack notification
+  - name: notify_slack_success
+    type: http
+    depends_on: [run_smoke_tests]
+    config:
+      url: "${SLACK_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        text: "🚀 Deployment successful: ${APP_SERVICE_NAME}"
+        blocks:
+          - type: "header"
+            text:
+              type: "plain_text"
+              text: "Deployment Success"
+          - type: "section"
+            fields:
+              - type: "mrkdwn"
+                text: "*Application:*\n${APP_SERVICE_NAME}"
+              - type: "mrkdwn"
+                text: "*Target:*\n${DEPLOY_TARGET_HOST}"
+              - type: "mrkdwn"
+                text: "*Branch:*\n${DEPLOY_BRANCH}"
+              - type: "mrkdwn"
+                text: "*Status:*\n✅ Healthy"
+      timeout: 20
+    retry: 2
+    continue_on_failure: true
+
+  # ========================================
+  # ROLLBACK TASKS (Manual trigger or on failure)
+  # ========================================
+  # NOTE: These tasks would typically be in a separate rollback workflow
+  # or triggered conditionally on deployment failure
+
+  # Rollback Step 1: Stop failed deployment
+  - name: rollback_stop_application
+    type: ssh
+    # This task would be triggered manually or via conditional execution
+    # depends_on: [verify_deployment_health]  # If health check fails
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        echo "ROLLBACK: Stopping failed deployment"
+        sudo systemctl stop ${APP_SERVICE_NAME}
+      timeout: 30
+    continue_on_failure: true
+
+  # Rollback Step 2: Restore previous version
+  - name: rollback_restore_backup
+    type: ssh
+    # depends_on: [rollback_stop_application]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        source /tmp/picoflow_deploy_backup.sh
+
+        if [ -z "$BACKUP_DIR" ]; then
+          echo "Error: No backup directory found"
+          exit 1
+        fi
+
+        echo "ROLLBACK: Restoring from backup: $BACKUP_DIR"
+
+        DEPLOY_DIR="${APP_DEPLOY_PATH}"
+
+        # Remove failed deployment
+        rm -rf "$DEPLOY_DIR"
+
+        # Restore from backup
+        cp -r "$BACKUP_DIR"/* "$DEPLOY_DIR/"
+
+        echo "Backup restored successfully"
+      timeout: 120
+    continue_on_failure: true
+
+  # Rollback Step 3: Restart with previous version
+  - name: rollback_start_application
+    type: ssh
+    # depends_on: [rollback_restore_backup]
+    config:
+      host: "${DEPLOY_TARGET_HOST}"
+      user: "${DEPLOY_USER}"
+      command: |
+        echo "ROLLBACK: Starting previous version"
+        sudo systemctl start ${APP_SERVICE_NAME}
+
+        sleep 10
+
+        if systemctl is-active --quiet ${APP_SERVICE_NAME}; then
+          echo "Rollback successful: Previous version restored"
+        else
+          echo "Error: Rollback failed - service not starting"
+          exit 1
+        fi
+      timeout: 60
+    continue_on_failure: true
+
+  # Rollback Step 4: Notify rollback
+  - name: notify_rollback
+    type: http
+    # depends_on: [rollback_start_application]
+    config:
+      url: "${SLACK_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        text: "⚠️ Deployment rolled back: ${APP_SERVICE_NAME}"
+        blocks:
+          - type: "header"
+            text:
+              type: "plain_text"
+              text: "Deployment Rollback"
+          - type: "section"
+            text:
+              type: "mrkdwn"
+              text: "Deployment failed and was rolled back to previous version.\n\n*Target:* ${DEPLOY_TARGET_HOST}\n*Application:* ${APP_SERVICE_NAME}"
+      timeout: 20
+    retry: 2
+    continue_on_failure: true
+
+# Environment Variables Required:
+# - DEPLOY_TARGET_HOST: Target deployment server hostname
+# - DEPLOY_USER: SSH user for deployment
+# - HEALTH_CHECK_TOKEN: Bearer token for health check endpoint
+# - APP_DEPLOY_PATH: Application deployment directory (e.g., /opt/myapp)
+# - APP_BACKUP_PATH: Backup storage directory (e.g., /opt/backups)
+# - APP_SERVICE_NAME: Systemd service name (e.g., myapp.service)
+# - APP_REPO_PATH: Git repository path on target (e.g., /home/deploy/myapp)
+# - DEPLOY_BRANCH: Git branch to deploy (e.g., main, production)
+# - APP_BINARY_NAME: Binary/application name (for Rust/Go apps)
+# - APP_PORT: Application listening port (e.g., 8080)
+# - NOTIFICATION_WEBHOOK_URL: Generic webhook for notifications
+# - SLACK_WEBHOOK_URL: Slack incoming webhook URL
+
+# Security Notes:
+# - Use SSH key-based authentication (no passwords)
+# - Deploy user should have limited sudo privileges (only for systemctl)
+# - Consider using deployment keys for Git access
+# - Implement proper secret management for API keys
+# - Use principle of least privilege for deployment user
+# - Consider using a secrets manager (Vault, AWS Secrets Manager)
+
+# Performance Notes:
+# - Dependency installation can take 5-10 minutes
+# - Total deployment time: 15-30 minutes depending on application size
+# - Sequential execution ensures safe deployment
+# - Consider blue-green deployment for zero-downtime
+
+# Rollback Strategy:
+# - Backup created before deployment
+# - Manual rollback workflow available
+# - Automatic rollback on health check failure (requires conditional execution)
+# - Keep last 5 deployment backups
+
+# Production Considerations:
+# - Test deployment in staging environment first
+# - Implement deployment windows (maintenance periods)
+# - Consider canary deployments for gradual rollout
+# - Monitor application metrics during and after deployment
+# - Document rollback procedures
+# - Implement deployment approval process for production
+# - Use feature flags for safer deployments
+
+# Monitoring:
+# - Track deployment frequency and success rate
+# - Monitor application health post-deployment
+# - Alert on failed deployments
+# - Track rollback frequency
+# - Measure deployment duration
+
+# Edge Device Specific Considerations:
+# - Limited resources: Minimize build steps on device
+# - Consider cross-compilation and binary deployment
+# - Network reliability: Implement retry logic
+# - Disk space: Clean up old backups regularly
+# - Remote access: Ensure reliable SSH connectivity

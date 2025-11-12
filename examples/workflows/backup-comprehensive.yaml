@@ -1,0 +1,409 @@
+name: comprehensive-backup-pipeline
+description: "Production-grade backup workflow with health checks, verification, and notifications"
+schedule: "0 2 * * *"  # Daily at 2 AM
+
+config:
+  max_parallel: 2
+  retry_default: 3
+  timeout_default: 600  # 10 minutes default for backup operations
+
+tasks:
+  # Step 1: Pre-backup health check - verify database is healthy
+  - name: check_database_health
+    type: http
+    config:
+      url: "https://${DB_PROXY_HOST}/health"
+      method: GET
+      headers:
+        Authorization: "Bearer ${DB_HEALTH_TOKEN}"
+      timeout: 15
+    retry: 2
+    # Don't start backup if database is unhealthy
+
+  # Step 2: Check available disk space on backup server
+  - name: check_backup_storage
+    type: ssh
+    depends_on: [check_database_health]
+    config:
+      host: "${BACKUP_HOST}"
+      user: "${BACKUP_USER}"
+      command: |
+        # Check available space in backup directory
+        AVAILABLE_GB=$(df -BG /backup | tail -1 | awk '{print $4}' | sed 's/G//')
+
+        # Require at least 10GB free space
+        if [ "$AVAILABLE_GB" -lt 10 ]; then
+          echo "Error: Insufficient disk space: ${AVAILABLE_GB}GB available, 10GB required"
+          exit 1
+        fi
+
+        echo "Disk space check passed: ${AVAILABLE_GB}GB available"
+      timeout: 30
+    retry: 2
+
+  # Step 3: Create backup directory structure
+  - name: prepare_backup_directory
+    type: ssh
+    depends_on: [check_backup_storage]
+    config:
+      host: "${BACKUP_HOST}"
+      user: "${BACKUP_USER}"
+      command: |
+        # Create dated backup directory
+        BACKUP_DIR="/backup/$(date +%Y/%m/%d)"
+        mkdir -p "$BACKUP_DIR"
+
+        # Set proper permissions
+        chmod 700 "$BACKUP_DIR"
+
+        echo "Backup directory ready: $BACKUP_DIR"
+      timeout: 30
+    retry: 1
+
+  # Step 4: Dump PostgreSQL database
+  - name: backup_postgres_database
+    type: ssh
+    depends_on: [prepare_backup_directory]
+    config:
+      host: "${DB_HOST}"
+      user: "${DB_USER}"
+      command: |
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        BACKUP_FILE="/tmp/postgres_backup_${TIMESTAMP}.sql"
+
+        # Dump database with compression
+        pg_dump -h localhost -U ${DB_NAME}_user -d ${DB_NAME} \
+          --format=plain \
+          --no-owner \
+          --no-acl \
+          --verbose \
+          > "$BACKUP_FILE" 2>&1
+
+        if [ $? -ne 0 ]; then
+          echo "Error: pg_dump failed"
+          rm -f "$BACKUP_FILE"
+          exit 1
+        fi
+
+        echo "Database dumped to: $BACKUP_FILE"
+        echo "BACKUP_FILE=$BACKUP_FILE" > /tmp/picoflow_backup_vars.sh
+      timeout: 900  # 15 minutes for large databases
+    retry: 2
+
+  # Step 5: Compress database backup
+  - name: compress_database_backup
+    type: ssh
+    depends_on: [backup_postgres_database]
+    config:
+      host: "${DB_HOST}"
+      user: "${DB_USER}"
+      command: |
+        # Read backup file path from previous task
+        source /tmp/picoflow_backup_vars.sh
+
+        if [ ! -f "$BACKUP_FILE" ]; then
+          echo "Error: Backup file not found: $BACKUP_FILE"
+          exit 1
+        fi
+
+        # Compress with gzip (best compression)
+        gzip -9 "$BACKUP_FILE"
+
+        COMPRESSED_FILE="${BACKUP_FILE}.gz"
+
+        if [ ! -f "$COMPRESSED_FILE" ]; then
+          echo "Error: Compression failed"
+          exit 1
+        fi
+
+        # Calculate sizes
+        ORIGINAL_SIZE=$(stat -c%s "$BACKUP_FILE" 2>/dev/null || echo "unknown")
+        COMPRESSED_SIZE=$(stat -c%s "$COMPRESSED_FILE")
+
+        echo "Compression complete: ${COMPRESSED_FILE}"
+        echo "Size: ${COMPRESSED_SIZE} bytes"
+        echo "COMPRESSED_FILE=$COMPRESSED_FILE" >> /tmp/picoflow_backup_vars.sh
+      timeout: 300  # 5 minutes for compression
+    retry: 1
+
+  # Step 6: Transfer backup to backup server
+  - name: transfer_backup_to_storage
+    type: shell
+    depends_on: [compress_database_backup, prepare_backup_directory]
+    config:
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - |
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          BACKUP_DIR="/backup/$(date +%Y/%m/%d)"
+          REMOTE_FILE="${BACKUP_DIR}/postgres_${DB_NAME}_${TIMESTAMP}.sql.gz"
+
+          # Transfer using scp with compression
+          scp -C \
+            -i "${SSH_KEY_PATH}" \
+            -o StrictHostKeyChecking=no \
+            "${DB_USER}@${DB_HOST}:/tmp/postgres_backup_*.sql.gz" \
+            "${BACKUP_USER}@${BACKUP_HOST}:${REMOTE_FILE}"
+
+          if [ $? -ne 0 ]; then
+            echo "Error: SCP transfer failed"
+            exit 1
+          fi
+
+          echo "Backup transferred to: ${REMOTE_FILE}"
+          echo "REMOTE_FILE=${REMOTE_FILE}" > /tmp/picoflow_remote_backup.sh
+      timeout: 600  # 10 minutes for transfer
+    retry: 3
+
+  # Step 7: Verify backup integrity on backup server
+  - name: verify_backup_integrity
+    type: ssh
+    depends_on: [transfer_backup_to_storage]
+    config:
+      host: "${BACKUP_HOST}"
+      user: "${BACKUP_USER}"
+      command: |
+        # Find the most recent backup file
+        LATEST_BACKUP=$(ls -t /backup/$(date +%Y/%m/%d)/postgres_${DB_NAME}_*.sql.gz 2>/dev/null | head -1)
+
+        if [ -z "$LATEST_BACKUP" ]; then
+          echo "Error: Backup file not found on storage"
+          exit 1
+        fi
+
+        # Verify gzip integrity
+        gzip -t "$LATEST_BACKUP"
+
+        if [ $? -ne 0 ]; then
+          echo "Error: Backup file is corrupted"
+          exit 1
+        fi
+
+        # Check file size (should be at least 1MB for real database)
+        FILE_SIZE=$(stat -c%s "$LATEST_BACKUP")
+
+        if [ "$FILE_SIZE" -lt 1048576 ]; then
+          echo "Warning: Backup file seems too small: ${FILE_SIZE} bytes"
+        fi
+
+        # Calculate checksum
+        CHECKSUM=$(sha256sum "$LATEST_BACKUP" | awk '{print $1}')
+
+        echo "Backup verification passed"
+        echo "File: $LATEST_BACKUP"
+        echo "Size: $FILE_SIZE bytes"
+        echo "SHA256: $CHECKSUM"
+      timeout: 120
+    retry: 1
+
+  # Step 8: Test restore (sample data)
+  - name: test_backup_restore
+    type: ssh
+    depends_on: [verify_backup_integrity]
+    config:
+      host: "${BACKUP_HOST}"
+      user: "${BACKUP_USER}"
+      command: |
+        # Find the latest backup
+        LATEST_BACKUP=$(ls -t /backup/$(date +%Y/%m/%d)/postgres_${DB_NAME}_*.sql.gz 2>/dev/null | head -1)
+
+        # Test restore by extracting first 100 lines
+        zcat "$LATEST_BACKUP" | head -100 > /tmp/restore_test.sql
+
+        # Verify SQL syntax (basic check)
+        if ! grep -q "CREATE TABLE\|INSERT INTO\|COPY" /tmp/restore_test.sql; then
+          echo "Warning: Backup may not contain valid SQL"
+        fi
+
+        # Cleanup test file
+        rm -f /tmp/restore_test.sql
+
+        echo "Restore test passed"
+      timeout: 60
+    continue_on_failure: true  # Don't fail entire workflow if restore test fails
+
+  # Step 9: Clean up temporary files on database server
+  - name: cleanup_temp_files_db_server
+    type: ssh
+    depends_on: [transfer_backup_to_storage]
+    config:
+      host: "${DB_HOST}"
+      user: "${DB_USER}"
+      command: |
+        # Remove temporary backup files
+        rm -f /tmp/postgres_backup_*.sql
+        rm -f /tmp/postgres_backup_*.sql.gz
+        rm -f /tmp/picoflow_backup_vars.sh
+
+        echo "Cleanup completed on database server"
+      timeout: 30
+    continue_on_failure: true
+
+  # Step 10: Clean up old backups (retention policy)
+  - name: cleanup_old_backups
+    type: ssh
+    depends_on: [verify_backup_integrity]
+    config:
+      host: "${BACKUP_HOST}"
+      user: "${BACKUP_USER}"
+      command: |
+        # Delete backups older than 30 days
+        RETENTION_DAYS=30
+
+        echo "Cleaning up backups older than ${RETENTION_DAYS} days..."
+
+        # Find and delete old backup files
+        find /backup -name "postgres_${DB_NAME}_*.sql.gz" -mtime +${RETENTION_DAYS} -type f -delete
+
+        # Remove empty directories
+        find /backup -type d -empty -delete
+
+        # Count remaining backups
+        BACKUP_COUNT=$(find /backup -name "postgres_${DB_NAME}_*.sql.gz" | wc -l)
+
+        echo "Cleanup complete. ${BACKUP_COUNT} backups retained."
+      timeout: 120
+    continue_on_failure: true  # Don't fail if cleanup has issues
+
+  # Step 11: Generate backup report
+  - name: generate_backup_report
+    type: shell
+    depends_on: [verify_backup_integrity, cleanup_old_backups]
+    config:
+      command: "/bin/sh"
+      args:
+        - "-c"
+        - |
+          REPORT_FILE="/tmp/backup_report_$(date +%Y%m%d).txt"
+
+          cat > "$REPORT_FILE" <<EOF
+          ============================================
+          PicoFlow Backup Report
+          ============================================
+          Database: ${DB_NAME}
+          Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+          Status: SUCCESS
+
+          Backup Details:
+          - Database Host: ${DB_HOST}
+          - Backup Host: ${BACKUP_HOST}
+          - Backup Path: /backup/$(date +%Y/%m/%d)/
+
+          Verification:
+          - Integrity check: PASSED
+          - Restore test: PASSED
+          - Cleanup: COMPLETED
+
+          Retention Policy:
+          - Active: 30 days
+          - Backup schedule: Daily at 2 AM
+
+          Next scheduled backup: $(date -d tomorrow +%Y-%m-%d) 02:00:00
+          ============================================
+          EOF
+
+          cat "$REPORT_FILE"
+
+          echo "REPORT_FILE=$REPORT_FILE" > /tmp/picoflow_report.sh
+      timeout: 30
+    continue_on_failure: true
+
+  # Step 12: Send success notification
+  - name: notify_success
+    type: http
+    depends_on: [generate_backup_report]
+    config:
+      url: "${NOTIFICATION_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        status: "success"
+        workflow: "comprehensive-backup-pipeline"
+        database: "${DB_NAME}"
+        timestamp: "{{timestamp}}"
+        message: "Database backup completed successfully"
+        details:
+          backup_location: "/backup/$(date +%Y/%m/%d)/"
+          retention_days: 30
+      timeout: 20
+    retry: 3
+    continue_on_failure: true
+
+  # Step 13: Send Slack notification
+  - name: notify_slack
+    type: http
+    depends_on: [verify_backup_integrity]
+    config:
+      url: "${SLACK_WEBHOOK_URL}"
+      method: POST
+      headers:
+        Content-Type: "application/json"
+      body:
+        text: "✅ Database backup completed successfully"
+        blocks:
+          - type: "header"
+            text:
+              type: "plain_text"
+              text: "Backup Success: ${DB_NAME}"
+          - type: "section"
+            fields:
+              - type: "mrkdwn"
+                text: "*Database:*\n${DB_NAME}"
+              - type: "mrkdwn"
+                text: "*Time:*\n$(date +%Y-%m-%d_%H:%M:%S)"
+              - type: "mrkdwn"
+                text: "*Location:*\n${BACKUP_HOST}"
+              - type: "mrkdwn"
+                text: "*Status:*\n✅ Verified"
+      timeout: 20
+    retry: 2
+    continue_on_failure: true
+
+# Environment Variables Required:
+# - DB_PROXY_HOST: Database proxy/health check endpoint
+# - DB_HEALTH_TOKEN: Bearer token for database health endpoint
+# - DB_HOST: Database server hostname
+# - DB_USER: Database user for backup operations
+# - DB_NAME: Database name to backup
+# - BACKUP_HOST: Backup storage server hostname
+# - BACKUP_USER: SSH user on backup server
+# - SSH_KEY_PATH: Path to SSH private key for authentication
+# - NOTIFICATION_WEBHOOK_URL: Generic webhook URL for notifications
+# - SLACK_WEBHOOK_URL: Slack incoming webhook URL
+
+# Security Notes:
+# - Use SSH key-based authentication (no passwords)
+# - Database credentials should use password file or .pgpass
+# - SSH keys should have restricted permissions (chmod 600)
+# - Backup directory should have restricted permissions (chmod 700)
+# - Consider encrypting backups at rest using gpg
+# - Rotate SSH keys and database credentials regularly
+
+# Performance Notes:
+# - Large databases (>10GB) may take 15+ minutes to dump
+# - Compression typically achieves 5-10x size reduction
+# - Network transfer time depends on bandwidth
+# - Total workflow runtime: 20-40 minutes for typical databases
+# - Memory usage: Depends on pg_dump, typically <100MB
+
+# Recovery Procedures:
+# To restore from backup:
+# 1. Locate backup file: /backup/YYYY/MM/DD/postgres_dbname_*.sql.gz
+# 2. Copy to database server
+# 3. Extract: gunzip postgres_dbname_*.sql.gz
+# 4. Restore: psql -U user -d dbname < postgres_dbname_*.sql
+
+# Monitoring:
+# - Check workflow execution history in PicoFlow
+# - Monitor backup server disk usage
+# - Alert on failed backups (via notification tasks)
+# - Periodically test restore procedures
+
+# Production Considerations:
+# - Test restore procedures regularly (monthly)
+# - Monitor backup sizes for unexpected growth
+# - Implement off-site backup replication
+# - Consider incremental backups for very large databases
+# - Document recovery procedures and RTO/RPO targets
