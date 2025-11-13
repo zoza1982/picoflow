@@ -27,6 +27,7 @@ async fn test_http_get_success() {
         body: None,
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     // Execute request
@@ -72,6 +73,7 @@ email: test@example.com
         body: Some(body_yaml),
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -106,6 +108,7 @@ name: updated_name
         body: Some(body_yaml),
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -131,6 +134,7 @@ async fn test_http_delete_request() {
         body: None,
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -162,6 +166,7 @@ async fn test_http_custom_headers() {
         body: None,
         headers,
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -188,6 +193,7 @@ async fn test_http_4xx_error() {
         body: None,
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -214,6 +220,7 @@ async fn test_http_5xx_error() {
         body: None,
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -241,6 +248,7 @@ async fn test_http_timeout() {
         body: None,
         headers: HashMap::new(),
         timeout: 1, // 1 second timeout
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -271,6 +279,7 @@ async fn test_http_large_response_truncation() {
         body: None,
         headers: HashMap::new(),
         timeout: 30,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();
@@ -295,6 +304,7 @@ async fn test_http_connection_error() {
         body: None,
         headers: HashMap::new(),
         timeout: 5,
+        allow_private_ips: true, // Allow localhost for testing
     });
 
     let result = executor.execute(&config).await.unwrap();

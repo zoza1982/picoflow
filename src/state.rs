@@ -79,6 +79,47 @@ impl StateManager {
     /// # Ok::<(), picoflow::error::PicoFlowError>(())
     /// ```
     pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
+        let db_path = db_path.as_ref();
+
+        // Set restrictive permissions on database file if it doesn't exist yet
+        // This prevents world-readable database files (security issue FS-01)
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            // Create database file with mode 0600 (owner read/write only) if it doesn't exist
+            if !db_path.exists() {
+                OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .mode(0o600) // Owner read/write only
+                    .open(db_path)?;
+
+                debug!(
+                    "Created database file {:?} with permissions 0600 (owner read/write only)",
+                    db_path
+                );
+            } else {
+                // If file exists, update permissions to 0600
+                use std::fs;
+                let metadata = fs::metadata(db_path)?;
+                let mut permissions = metadata.permissions();
+
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    permissions.set_mode(0o600);
+                    fs::set_permissions(db_path, permissions)?;
+                    debug!(
+                        "Updated database file {:?} permissions to 0600 (owner read/write only)",
+                        db_path
+                    );
+                }
+            }
+        }
+
         let conn = Connection::open(db_path)?;
 
         // Configure SQLite for edge devices
@@ -908,6 +949,36 @@ mod tests {
 
         let history = manager.get_execution_history("test", 3).unwrap();
         assert_eq!(history.len(), 3);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_database_file_permissions() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
+
+        // Create a temporary directory
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create state manager (should create DB with 0600 permissions)
+        let _manager = StateManager::new(&db_path).unwrap();
+
+        // Check file permissions
+        let metadata = fs::metadata(&db_path).unwrap();
+        let permissions = metadata.permissions();
+        let mode = permissions.mode();
+
+        // Mask to get only permission bits (last 9 bits)
+        let perm_bits = mode & 0o777;
+
+        // Should be 0600 (owner read/write only)
+        assert_eq!(
+            perm_bits, 0o600,
+            "Database file should have 0600 permissions, got {:o}",
+            perm_bits
+        );
     }
 
     #[test]

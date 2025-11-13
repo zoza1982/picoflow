@@ -118,6 +118,12 @@ pub struct SshConfig {
     pub key_path: Option<String>, // Path to SSH private key
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>, // Default: 22
+    #[serde(default = "default_verify_host_key")]
+    pub verify_host_key: bool, // Default: true (for security)
+}
+
+fn default_verify_host_key() -> bool {
+    true
 }
 
 /// HTTP executor configuration
@@ -132,6 +138,12 @@ pub struct HttpConfig {
     pub headers: HashMap<String, String>,
     #[serde(default = "default_timeout")]
     pub timeout: u64, // seconds
+    #[serde(default = "default_allow_private_ips")]
+    pub allow_private_ips: bool, // Default: false (for security, blocks SSRF)
+}
+
+fn default_allow_private_ips() -> bool {
+    false
 }
 
 fn default_http_method() -> HttpMethod {

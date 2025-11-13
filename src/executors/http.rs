@@ -37,6 +37,7 @@
 //!     body: None,
 //!     headers: HashMap::new(),
 //!     timeout: 30,
+//!     allow_private_ips: false,
 //! });
 //!
 //! let result = executor.execute(&config).await?;
@@ -52,8 +53,10 @@ use crate::models::{
 };
 use async_trait::async_trait;
 use reqwest::{Client, Method};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
+use url::Host;
 
 /// HTTP executor for REST API calls
 #[derive(Debug, Clone)]
@@ -76,6 +79,151 @@ impl HttpExecutor {
         Self { client }
     }
 
+    /// Validate URL for SSRF (Server-Side Request Forgery) protection
+    ///
+    /// # Security
+    ///
+    /// This prevents SSRF attacks by blocking requests to:
+    /// - Private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    /// - Localhost (127.0.0.0/8, ::1)
+    /// - Link-local addresses (169.254.0.0/16, fe80::/10)
+    /// - Cloud metadata services (169.254.169.254, metadata.google.internal)
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to validate
+    /// * `allow_private_ips` - If true, allows requests to private IPs (use with caution!)
+    ///
+    /// # Errors
+    ///
+    /// Returns error if URL targets a blocked address or domain
+    fn validate_ssrf(url: &str, allow_private_ips: bool) -> Result<()> {
+        let parsed_url = reqwest::Url::parse(url).map_err(|e| {
+            PicoFlowError::Validation(format!("Invalid URL for SSRF check: {}", e))
+        })?;
+
+        // Only allow HTTP and HTTPS schemes
+        let scheme = parsed_url.scheme();
+        if scheme != "http" && scheme != "https" {
+            return Err(PicoFlowError::Validation(format!(
+                "Invalid URL scheme '{}': only http and https are allowed",
+                scheme
+            )));
+        }
+
+        // Get host from URL
+        let host = parsed_url.host().ok_or_else(|| {
+            PicoFlowError::Validation("URL must contain a host".to_string())
+        })?;
+
+        match host {
+            Host::Ipv4(ip) => {
+                if !allow_private_ips {
+                    Self::validate_ipv4_not_private(ip)?;
+                }
+            }
+            Host::Ipv6(ip) => {
+                if !allow_private_ips {
+                    Self::validate_ipv6_not_private(ip)?;
+                }
+            }
+            Host::Domain(domain) => {
+                if !allow_private_ips {
+                    Self::validate_domain_not_blocked(domain)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate IPv4 address is not private/local
+    fn validate_ipv4_not_private(ip: Ipv4Addr) -> Result<()> {
+        if ip.is_private() {
+            return Err(PicoFlowError::Http(format!(
+                "SSRF protection: Requests to private IP addresses are blocked ({}). \
+                 Set allow_private_ips: true to override (NOT recommended)",
+                ip
+            )));
+        }
+
+        if ip.is_loopback() {
+            return Err(PicoFlowError::Http(format!(
+                "SSRF protection: Requests to loopback addresses are blocked ({})",
+                ip
+            )));
+        }
+
+        if ip.is_link_local() {
+            return Err(PicoFlowError::Http(format!(
+                "SSRF protection: Requests to link-local addresses are blocked ({})",
+                ip
+            )));
+        }
+
+        // Check for cloud metadata service IP (169.254.169.254)
+        if ip == Ipv4Addr::new(169, 254, 169, 254) {
+            return Err(PicoFlowError::Http(
+                "SSRF protection: Requests to cloud metadata services are blocked (169.254.169.254)"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate IPv6 address is not private/local
+    fn validate_ipv6_not_private(ip: Ipv6Addr) -> Result<()> {
+        if ip.is_loopback() {
+            return Err(PicoFlowError::Http(format!(
+                "SSRF protection: Requests to loopback addresses are blocked ({})",
+                ip
+            )));
+        }
+
+        if ip.is_unicast_link_local() {
+            return Err(PicoFlowError::Http(format!(
+                "SSRF protection: Requests to link-local addresses are blocked ({})",
+                ip
+            )));
+        }
+
+        // IPv6 unique local addresses (fc00::/7)
+        if (ip.segments()[0] & 0xfe00) == 0xfc00 {
+            return Err(PicoFlowError::Http(format!(
+                "SSRF protection: Requests to private IPv6 addresses are blocked ({})",
+                ip
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validate domain is not in blocklist
+    fn validate_domain_not_blocked(domain: &str) -> Result<()> {
+        // List of blocked domains (cloud metadata services and localhost aliases)
+        let blocked_domains = [
+            "localhost",
+            "metadata.google.internal",     // GCP metadata
+            "169.254.169.254",              // AWS/Azure metadata (IP as domain)
+            "metadata",                     // Generic metadata alias
+            "instance-data",                // AWS IMDSv1
+        ];
+
+        let domain_lower = domain.to_lowercase();
+
+        for blocked in &blocked_domains {
+            if domain_lower == *blocked || domain_lower.ends_with(&format!(".{}", blocked)) {
+                return Err(PicoFlowError::Http(format!(
+                    "SSRF protection: Requests to '{}' are blocked (metadata service or localhost)",
+                    domain
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate HTTP configuration
     fn validate_config(config: &HttpConfig) -> Result<()> {
         // Validate URL
@@ -93,12 +241,23 @@ impl HttpExecutor {
             )));
         }
 
+        // SSRF protection
+        Self::validate_ssrf(&config.url, config.allow_private_ips)?;
+
         // Validate timeout is reasonable (1 second to 1 hour)
         if config.timeout == 0 || config.timeout > 3600 {
             return Err(PicoFlowError::Validation(format!(
                 "HTTP timeout must be between 1 and 3600 seconds, got: {}",
                 config.timeout
             )));
+        }
+
+        // Log warning if private IPs are allowed
+        if config.allow_private_ips {
+            warn!(
+                "SECURITY WARNING: allow_private_ips is enabled for URL {} - SSRF protection disabled",
+                config.url
+            );
         }
 
         Ok(())
@@ -290,6 +449,7 @@ impl ExecutorTrait for HttpExecutor {
             body: None,
             headers: std::collections::HashMap::new(),
             timeout: 5,
+            allow_private_ips: false,
         };
 
         let result = self.execute_http(&config, 5).await?;
@@ -321,6 +481,7 @@ mod tests {
             body: None,
             headers: HashMap::new(),
             timeout: 30,
+            allow_private_ips: false,
         };
 
         let result = HttpExecutor::validate_config(&config);
@@ -336,6 +497,7 @@ mod tests {
             body: None,
             headers: HashMap::new(),
             timeout: 30,
+            allow_private_ips: false,
         };
 
         let result = HttpExecutor::validate_config(&config);
@@ -350,6 +512,7 @@ mod tests {
             body: None,
             headers: HashMap::new(),
             timeout: 0,
+            allow_private_ips: false,
         };
 
         let result = HttpExecutor::validate_config(&config);
@@ -361,6 +524,7 @@ mod tests {
             body: None,
             headers: HashMap::new(),
             timeout: 4000,
+            allow_private_ips: false,
         };
 
         let result = HttpExecutor::validate_config(&config);
@@ -375,10 +539,111 @@ mod tests {
             body: None,
             headers: HashMap::new(),
             timeout: 30,
+            allow_private_ips: false,
         };
 
         let result = HttpExecutor::validate_config(&config);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_ssrf_protection_private_ip() {
+        // Test blocking private IP ranges
+        let private_ips = vec![
+            "http://10.0.0.1/",
+            "http://172.16.0.1/",
+            "http://192.168.1.1/",
+            "http://127.0.0.1/",
+        ];
+
+        for url in private_ips {
+            let config = HttpConfig {
+                url: url.to_string(),
+                method: HttpMethod::Get,
+                body: None,
+                headers: HashMap::new(),
+                timeout: 30,
+                allow_private_ips: false,
+            };
+
+            let result = HttpExecutor::validate_config(&config);
+            assert!(result.is_err(), "Should block private IP: {}", url);
+            assert!(matches!(result, Err(PicoFlowError::Http(_))));
+        }
+    }
+
+    #[test]
+    fn test_ssrf_protection_metadata_service() {
+        // Test blocking cloud metadata service
+        let config = HttpConfig {
+            url: "http://169.254.169.254/latest/meta-data/".to_string(),
+            method: HttpMethod::Get,
+            body: None,
+            headers: HashMap::new(),
+            timeout: 30,
+            allow_private_ips: false,
+        };
+
+        let result = HttpExecutor::validate_config(&config);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(PicoFlowError::Http(_))));
+    }
+
+    #[test]
+    fn test_ssrf_protection_localhost_domain() {
+        // Test blocking localhost domain
+        let config = HttpConfig {
+            url: "http://localhost:8080/".to_string(),
+            method: HttpMethod::Get,
+            body: None,
+            headers: HashMap::new(),
+            timeout: 30,
+            allow_private_ips: false,
+        };
+
+        let result = HttpExecutor::validate_config(&config);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(PicoFlowError::Http(_))));
+    }
+
+    #[test]
+    fn test_ssrf_protection_allow_private_ips() {
+        // Test that allow_private_ips flag works
+        let config = HttpConfig {
+            url: "http://192.168.1.1/".to_string(),
+            method: HttpMethod::Get,
+            body: None,
+            headers: HashMap::new(),
+            timeout: 30,
+            allow_private_ips: true,
+        };
+
+        let result = HttpExecutor::validate_config(&config);
+        assert!(result.is_ok(), "Should allow private IP when flag is set");
+    }
+
+    #[test]
+    fn test_ssrf_protection_public_url() {
+        // Test that public URLs are allowed
+        let public_urls = vec![
+            "https://api.github.com/",
+            "https://www.google.com/",
+            "http://example.com/",
+        ];
+
+        for url in public_urls {
+            let config = HttpConfig {
+                url: url.to_string(),
+                method: HttpMethod::Get,
+                body: None,
+                headers: HashMap::new(),
+                timeout: 30,
+                allow_private_ips: false,
+            };
+
+            let result = HttpExecutor::validate_config(&config);
+            assert!(result.is_ok(), "Should allow public URL: {}", url);
+        }
     }
 
     #[test]

@@ -1548,6 +1548,7 @@ dependencies = [
  "tokio-cron-scheduler",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
  "wiremock",
 ]

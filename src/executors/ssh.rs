@@ -36,6 +36,7 @@
 //!     command: "uptime".to_string(),
 //!     key_path: Some("/home/user/.ssh/id_rsa".to_string()),
 //!     port: Some(22),
+//!     verify_host_key: true,
 //! });
 //!
 //! let result = executor.execute(&config).await?;
@@ -50,11 +51,11 @@ use crate::models::{
     ExecutionResult, SshConfig, TaskExecutorConfig, TaskStatus, MAX_COMMAND_LEN, MAX_OUTPUT_SIZE,
 };
 use async_trait::async_trait;
-use ssh2::Session;
+use ssh2::{CheckResult, KnownHostFileKind, Session};
 use std::collections::HashMap;
 use std::io::Read;
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -82,6 +83,105 @@ impl SshExecutor {
     pub fn new() -> Self {
         Self {
             _connection_pool: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    /// Get path to known_hosts file
+    ///
+    /// Looks for known_hosts in the following order:
+    /// 1. ~/.ssh/known_hosts (standard location)
+    /// 2. Returns None if not found
+    fn get_known_hosts_path() -> Option<PathBuf> {
+        let home = std::env::var("HOME").ok()?;
+        let known_hosts = PathBuf::from(format!("{}/.ssh/known_hosts", home));
+        if known_hosts.exists() {
+            Some(known_hosts)
+        } else {
+            None
+        }
+    }
+
+    /// Verify SSH host key against known_hosts
+    ///
+    /// # Security
+    ///
+    /// This implements host key verification to prevent MITM attacks.
+    /// The host key is checked against ~/.ssh/known_hosts.
+    ///
+    /// # Errors
+    ///
+    /// - Returns error if known_hosts file not found
+    /// - Returns error if host key not in known_hosts (NotFound)
+    /// - Returns error if host key doesn't match (Mismatch - possible MITM!)
+    fn verify_host_key(session: &Session, config: &SshConfig) -> Result<()> {
+        debug!("Verifying host key for {}", config.host);
+
+        // Get known_hosts file path
+        let known_hosts_path = Self::get_known_hosts_path().ok_or_else(|| {
+            PicoFlowError::Ssh {
+                host: config.host.clone(),
+                message: "known_hosts file not found at ~/.ssh/known_hosts. \
+                         Please run 'ssh-keyscan <host> >> ~/.ssh/known_hosts' or \
+                         set verify_host_key: false (NOT recommended for production)"
+                    .to_string(),
+            }
+        })?;
+
+        debug!("Using known_hosts file: {:?}", known_hosts_path);
+
+        // Initialize known hosts
+        let mut known_hosts = session.known_hosts().map_err(|e| PicoFlowError::Ssh {
+            host: config.host.clone(),
+            message: format!("Failed to initialize known_hosts: {}", e),
+        })?;
+
+        // Read known_hosts file
+        known_hosts
+            .read_file(&known_hosts_path, KnownHostFileKind::OpenSSH)
+            .map_err(|e| PicoFlowError::Ssh {
+                host: config.host.clone(),
+                message: format!("Failed to read known_hosts file: {}", e),
+            })?;
+
+        // Get server's host key
+        let (host_key, _key_type) = session.host_key().ok_or_else(|| PicoFlowError::Ssh {
+            host: config.host.clone(),
+            message: "Failed to get server host key".to_string(),
+        })?;
+
+        // Check host key
+        let port = config.port.unwrap_or(22);
+        let check_result = known_hosts.check_port(&config.host, port, host_key);
+
+        match check_result {
+            CheckResult::Match => {
+                info!("Host key verified successfully for {}", config.host);
+                Ok(())
+            }
+            CheckResult::NotFound => Err(PicoFlowError::Ssh {
+                host: config.host.clone(),
+                message: format!(
+                    "Host key not found in known_hosts file. \
+                     For security, this connection is blocked. \
+                     To trust this host, run: ssh-keyscan -p {} {} >> ~/.ssh/known_hosts",
+                    port, config.host
+                ),
+            }),
+            CheckResult::Mismatch => Err(PicoFlowError::Ssh {
+                host: config.host.clone(),
+                message: format!(
+                    "WARNING: Host key mismatch detected! \
+                     This could indicate a man-in-the-middle attack. \
+                     The host key for {} has changed. \
+                     If this is expected (e.g., server reinstall), remove the old key from \
+                     ~/.ssh/known_hosts and add the new one with: ssh-keyscan -p {} {} >> ~/.ssh/known_hosts",
+                    config.host, port, config.host
+                ),
+            }),
+            CheckResult::Failure => Err(PicoFlowError::Ssh {
+                host: config.host.clone(),
+                message: "Host key verification failed due to internal error".to_string(),
+            }),
         }
     }
 
@@ -167,6 +267,16 @@ impl SshExecutor {
             host: config.host.clone(),
             message: format!("SSH handshake failed: {}", e),
         })?;
+
+        // Verify host key if enabled
+        if config.verify_host_key {
+            Self::verify_host_key(&session, config)?;
+        } else {
+            warn!(
+                "Host key verification disabled for {} - SECURITY RISK: vulnerable to MITM attacks",
+                config.host
+            );
+        }
 
         // Authenticate with public key
         let default_key = std::env::var("HOME")
@@ -391,6 +501,7 @@ mod tests {
             command: "uptime".to_string(),
             key_path: None,
             port: None,
+            verify_host_key: true,
         };
 
         let result = SshExecutor::validate_config(&config);
@@ -406,6 +517,7 @@ mod tests {
             command: "uptime".to_string(),
             key_path: None,
             port: None,
+            verify_host_key: true,
         };
 
         let result = SshExecutor::validate_config(&config);
@@ -420,6 +532,7 @@ mod tests {
             command: "".to_string(),
             key_path: None,
             port: None,
+            verify_host_key: true,
         };
 
         let result = SshExecutor::validate_config(&config);
@@ -434,6 +547,7 @@ mod tests {
             command: "a".repeat(MAX_COMMAND_LEN + 1),
             key_path: None,
             port: None,
+            verify_host_key: true,
         };
 
         let result = SshExecutor::validate_config(&config);
@@ -448,8 +562,26 @@ mod tests {
             command: "uptime".to_string(),
             key_path: None,
             port: Some(22),
+            verify_host_key: true,
         };
 
+        let result = SshExecutor::validate_config(&config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_host_key_disabled() {
+        // Test that disabling host key verification is supported
+        let config = SshConfig {
+            host: "example.com".to_string(),
+            user: "test".to_string(),
+            command: "uptime".to_string(),
+            key_path: None,
+            port: Some(22),
+            verify_host_key: false,
+        };
+
+        // Should pass validation even though we're not verifying
         let result = SshExecutor::validate_config(&config);
         assert!(result.is_ok());
     }

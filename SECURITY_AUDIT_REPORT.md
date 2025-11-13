@@ -17,9 +17,14 @@ This security audit evaluated PicoFlow, a Rust-based DAG workflow orchestrator d
 
 - **Total Issues Found:** 5
   - **CRITICAL:** 0
-  - **HIGH:** 2
-  - **MEDIUM:** 2
+  - **HIGH:** 2 (1 pending)
+  - **MEDIUM:** 3 (all FIXED)
   - **LOW:** 1
+
+- **Issues Fixed (November 12, 2025):**
+  - **SSH-01:** Host key verification implemented [MEDIUM]
+  - **HTTP-01:** SSRF protection implemented [MEDIUM]
+  - **FS-01:** Database file permissions set to 0600 [MEDIUM]
 
 - **Strengths:**
   - Excellent command injection prevention with command+args pattern
@@ -131,11 +136,12 @@ channel.exec(&config.command)
 
 #### Issues Found
 
-**ISSUE SSH-01: Host Key Verification Not Implemented**
+**ISSUE SSH-01: Host Key Verification Not Implemented** [FIXED]
 
-**Severity:** **MEDIUM**
+**Severity:** **MEDIUM** → **RESOLVED**
 **Location:** `src/executors/ssh.rs` (ssh2 Session creation)
 **CWE:** CWE-295 (Improper Certificate Validation)
+**Status:** FIXED on November 12, 2025
 
 **Description:**
 The SSH executor does not verify host keys, making it vulnerable to man-in-the-middle (MITM) attacks. The `ssh2` crate's `Session::new()` does not perform host key verification by default.
@@ -194,6 +200,18 @@ match check {
 ```
 
 **Priority:** Medium (P1) - Should be fixed before v1.0 release
+
+**Fix Implemented:**
+Host key verification has been implemented using ssh2's KnownHosts API:
+- Added `verify_host_key: bool` field to `SshConfig` (default: true)
+- Implemented `verify_host_key()` method that checks against `~/.ssh/known_hosts`
+- Validates host keys using `session.known_hosts().check_port()`
+- Returns detailed errors for:
+  - `NotFound`: Host key not in known_hosts (provides ssh-keyscan command)
+  - `Mismatch`: Host key changed (warns about possible MITM attack)
+  - `Failure`: Internal verification error
+- Allows disabling verification with `verify_host_key: false` (logs security warning)
+- Added comprehensive unit tests for host key verification
 
 ---
 
@@ -276,11 +294,12 @@ scp -C \
 
 #### Issues Found
 
-**ISSUE HTTP-01: Missing SSRF Protection**
+**ISSUE HTTP-01: Missing SSRF Protection** [FIXED]
 
-**Severity:** **MEDIUM**
+**Severity:** **MEDIUM** → **RESOLVED**
 **Location:** `src/executors/http.rs`
 **CWE:** CWE-918 (Server-Side Request Forgery)
+**Status:** FIXED on November 12, 2025
 
 **Description:**
 The HTTP executor does not validate URLs to prevent Server-Side Request Forgery (SSRF) attacks. Users could potentially make requests to internal network resources.
@@ -367,6 +386,21 @@ config:
 ```
 
 **Priority:** Medium (P1) - Important for production deployments
+
+**Fix Implemented:**
+SSRF protection has been implemented with comprehensive URL validation:
+- Added `allow_private_ips: bool` field to `HttpConfig` (default: false)
+- Implemented `validate_ssrf()` function that blocks:
+  - Private IPv4 ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+  - Loopback addresses (127.0.0.0/8, ::1)
+  - Link-local addresses (169.254.0.0/16, fe80::/10)
+  - Cloud metadata service IP (169.254.169.254)
+  - IPv6 unique local addresses (fc00::/7)
+  - Blocked domains: localhost, metadata.google.internal, instance-data
+- Only allows http:// and https:// URL schemes
+- Provides clear error messages with security context
+- Allows opt-in private IP access with `allow_private_ips: true` (logs security warning)
+- Added extensive unit tests covering all SSRF scenarios
 
 ---
 
@@ -706,10 +740,11 @@ Scanning Cargo.lock for vulnerabilities (320 crate dependencies)
 
 #### SQLite Database
 
-**ISSUE FS-01: Database File Permissions**
+**ISSUE FS-01: Database File Permissions** [FIXED]
 
-**Severity:** **MEDIUM**
+**Severity:** **MEDIUM** → **RESOLVED**
 **Location:** `src/state.rs` (database file creation)
+**Status:** FIXED on November 12, 2025
 
 **Description:**
 The SQLite database file is created with default permissions (0644 on Unix), making it world-readable. The database contains sensitive workflow execution history and potentially sensitive command outputs.
@@ -755,6 +790,22 @@ pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
 ```
 
 **Priority:** Medium (P1) - Important for multi-user systems
+
+**Fix Implemented:**
+Database file permissions are now properly restricted:
+- Database files created with mode 0600 (owner read/write only) on Unix systems
+- Uses `OpenOptions::mode(0o600)` when creating new database files
+- Updates permissions to 0600 for existing database files on open
+- Platform-specific implementation using `#[cfg(unix)]`
+- Prevents world-readable database files containing sensitive execution data
+- Added unit test `test_database_file_permissions()` to verify 0600 permissions
+- Logs debug messages when setting/updating permissions
+
+**Security Impact:**
+- Database files are no longer world-readable on Unix systems
+- Sensitive workflow execution history protected from other users
+- Command outputs (stdout/stderr) not accessible to other users
+- Task configurations with sensitive data properly secured
 
 ---
 
@@ -988,13 +1039,13 @@ fn default_max_parallel() -> usize {
 
 ### Issues Requiring Fixes
 
-| ID | Severity | Component | Issue | Priority |
-|----|----------|-----------|-------|----------|
-| SSH-01 | MEDIUM | SSH Executor | Missing host key verification | P1 |
-| SSH-02 | HIGH | Examples | SSH host key checking disabled in examples | P0 |
-| HTTP-01 | MEDIUM | HTTP Executor | Missing SSRF protection | P1 |
-| HTTP-02 | LOW | HTTP Executor | Header injection risk (defensive) | P2 |
-| FS-01 | MEDIUM | Database | Database file permissions too permissive | P1 |
+| ID | Severity | Component | Issue | Priority | Status |
+|----|----------|-----------|-------|----------|--------|
+| SSH-01 | MEDIUM | SSH Executor | Missing host key verification | P1 | **FIXED** |
+| SSH-02 | HIGH | Examples | SSH host key checking disabled in examples | P0 | PENDING |
+| HTTP-01 | MEDIUM | HTTP Executor | Missing SSRF protection | P1 | **FIXED** |
+| HTTP-02 | LOW | HTTP Executor | Header injection risk (defensive) | P2 | OPEN |
+| FS-01 | MEDIUM | Database | Database file permissions too permissive | P1 | **FIXED** |
 
 ### Recommendations (Non-Issues)
 
@@ -1202,16 +1253,25 @@ PicoFlow demonstrates **strong security fundamentals** with excellent command in
 
 ### Critical Fixes Required (Before v1.0 Release)
 
+**Completed (November 12, 2025):**
+1. ~~**MEDIUM Priority:** Implement SSH host key verification (SSH-01)~~ ✅ FIXED
+2. ~~**MEDIUM Priority:** Add SSRF protection to HTTP executor (HTTP-01)~~ ✅ FIXED
+3. ~~**MEDIUM Priority:** Set restrictive database file permissions (FS-01)~~ ✅ FIXED
+
+**Remaining:**
 1. **HIGH Priority:** Update example workflows to remove `StrictHostKeyChecking=no` (SSH-02)
-2. **MEDIUM Priority:** Implement SSH host key verification (SSH-01)
-3. **MEDIUM Priority:** Add SSRF protection to HTTP executor (HTTP-01)
-4. **MEDIUM Priority:** Set restrictive database file permissions (FS-01)
 
 ### Overall Assessment
 
-**Security Rating: B+ (Good)**
+**Security Rating: A- (Very Good)** (Updated November 12, 2025)
 
-With the recommended fixes implemented, PicoFlow will be suitable for production deployment on edge devices. The security posture is strong, with only a few medium-priority issues to address before the v1.0 release.
+With all MEDIUM priority security fixes implemented, PicoFlow is now suitable for production deployment on edge devices. The security posture is strong, with only one HIGH priority example issue and one LOW priority defensive improvement remaining before the v1.0 release.
+
+**Security Improvements Implemented:**
+- Host key verification for SSH connections (prevents MITM attacks)
+- SSRF protection for HTTP executor (blocks access to internal resources)
+- Restrictive database file permissions (prevents data exposure on multi-user systems)
+- Comprehensive unit tests for all security features
 
 ---
 
