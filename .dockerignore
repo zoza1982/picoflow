@@ -1,0 +1,70 @@
+# Docker build ignore file
+# Excludes files from Docker build context for faster builds
+
+# Build artifacts
+target/
+*.so
+*.o
+*.a
+*.lib
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Git
+.git/
+.gitignore
+
+# Documentation (not needed for build)
+docs/
+examples/
+*.md
+!README.md
+
+# Test files
+tests/
+benches/
+
+# CI/CD
+.github/
+.claude/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Node modules (if any)
+node_modules/
+
+# Python (if any)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+
+# Cargo cache (will be rebuilt)
+.cargo/
+Cargo.lock
+
+# Release artifacts
+target/release-binaries/
+target/packages/
+*.tar.gz
+*.sha256

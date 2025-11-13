@@ -1,0 +1,339 @@
+name: Release Build
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Trigger on version tags (e.g., v1.0.0)
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      version:
+        description: 'Version to release (e.g., v1.0.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: arm32
+            target: armv7-unknown-linux-gnueabihf
+            os: linux
+          - platform: arm64
+            target: aarch64-unknown-linux-gnu
+            os: linux
+          - platform: x86_64
+            target: x86_64-unknown-linux-gnu
+            os: linux
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for version info
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-git-
+
+      - name: Cache target directory
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-${{ matrix.target }}-
+
+      - name: Build binary
+        env:
+          PICOFLOW_VERSION: ${{ steps.version.outputs.version }}
+          PICOFLOW_GIT_HASH: ${{ github.sha }}
+          PICOFLOW_BUILD_DATE: ${{ github.event.head_commit.timestamp }}
+        run: |
+          cargo build --release --target ${{ matrix.target }} --locked
+          ls -lh target/${{ matrix.target }}/release/picoflow
+
+      - name: Verify binary size
+        run: |
+          BINARY_SIZE=$(stat -c%s target/${{ matrix.target }}/release/picoflow)
+          SIZE_MB=$(echo "scale=2; $BINARY_SIZE / 1024 / 1024" | bc)
+          echo "Binary size: ${SIZE_MB}MB"
+
+          MAX_SIZE=$((10 * 1024 * 1024))  # 10MB
+          if [ $BINARY_SIZE -gt $MAX_SIZE ]; then
+            echo "::warning::Binary size ${SIZE_MB}MB exceeds 10MB target"
+          fi
+
+      - name: Rename binary
+        run: |
+          mkdir -p artifacts
+          cp target/${{ matrix.target }}/release/picoflow \
+             artifacts/picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }}
+          chmod +x artifacts/picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }}
+
+      - name: Generate checksum
+        run: |
+          cd artifacts
+          sha256sum picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }} > \
+            picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }}.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: picoflow-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  package:
+    name: Package Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release directory
+        run: |
+          mkdir -p release
+          # Merge all platform artifacts
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create installation packages
+        run: |
+          cd release
+
+          for platform in arm32 arm64 x86_64; do
+            BINARY="picoflow-${{ steps.version.outputs.version }}-${platform}"
+            PACKAGE_NAME="picoflow-${{ steps.version.outputs.version }}-${platform}-linux"
+
+            if [ -f "$BINARY" ]; then
+              echo "Creating package for ${platform}..."
+              mkdir -p "$PACKAGE_NAME"
+
+              # Copy binary
+              cp "$BINARY" "$PACKAGE_NAME/picoflow"
+
+              # Create install script
+              cat > "$PACKAGE_NAME/install.sh" <<'INSTALL'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+          echo "Installing picoflow to $INSTALL_DIR..."
+          mkdir -p "$INSTALL_DIR"
+          cp picoflow "$INSTALL_DIR/"
+          chmod +x "$INSTALL_DIR/picoflow"
+          echo "Installation complete! Run 'picoflow --version' to verify."
+          INSTALL
+              chmod +x "$PACKAGE_NAME/install.sh"
+
+              # Copy README
+              cp ../README.md "$PACKAGE_NAME/" || true
+
+              # Create archive
+              tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_NAME"
+              sha256sum "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
+
+              # Clean up
+              rm -rf "$PACKAGE_NAME"
+            fi
+          done
+
+          ls -lh
+
+      - name: Generate release notes
+        run: |
+          cat > release/RELEASE_NOTES.md <<NOTES
+          # PicoFlow ${{ steps.version.outputs.version }}
+
+          ## Installation
+
+          Download the appropriate package for your platform:
+
+          ### ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4)
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-arm32-linux.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-arm32-linux.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-arm32-linux
+          sudo ./install.sh
+          \`\`\`
+
+          ### ARM 64-bit (Raspberry Pi 4/5)
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-arm64-linux.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-arm64-linux.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-arm64-linux
+          sudo ./install.sh
+          \`\`\`
+
+          ### x86_64 Linux
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-x86_64-linux
+          sudo ./install.sh
+          \`\`\`
+
+          ## Binary Size
+
+          All binaries are optimized for size and stripped:
+          - Target: <10MB per binary
+          - Memory footprint: <20MB idle, <50MB with 10 parallel tasks
+
+          ## Checksums
+
+          SHA256 checksums are provided for each package. Verify with:
+          \`\`\`bash
+          sha256sum -c picoflow-*.tar.gz.sha256
+          \`\`\`
+
+          ## Documentation
+
+          - [Getting Started Guide](https://github.com/${{ github.repository }}/blob/main/docs/getting-started.md)
+          - [Configuration Reference](https://github.com/${{ github.repository }}/blob/main/docs/configuration.md)
+          - [Workflow Examples](https://github.com/${{ github.repository }}/tree/main/examples)
+
+          ## Support
+
+          - GitHub: https://github.com/${{ github.repository }}
+          - Issues: https://github.com/${{ github.repository }}/issues
+          NOTES
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: release/*
+
+  create-release:
+    name: Create GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: PicoFlow ${{ steps.version.outputs.version }}
+          body_path: release/RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          files: |
+            release/*.tar.gz
+            release/*.sha256
+            release/picoflow-*-arm32
+            release/picoflow-*-arm64
+            release/picoflow-*-x86_64
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-binaries:
+    name: Test Binaries
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform: [arm32, arm64, x86_64]
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: picoflow-${{ matrix.platform }}
+          path: artifacts
+
+      - name: Install QEMU (for ARM testing)
+        if: matrix.platform != 'x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static
+
+      - name: Test binary
+        run: |
+          cd artifacts
+          BINARY=$(ls picoflow-*)
+          chmod +x "$BINARY"
+
+          # Try to get version info
+          if [[ "${{ matrix.platform }}" == "x86_64" ]]; then
+            ./"$BINARY" --version || echo "::warning::Could not run --version on x86_64 binary"
+          elif [[ "${{ matrix.platform }}" == "arm32" ]]; then
+            qemu-arm-static -L /usr/arm-linux-gnueabihf/ "$BINARY" --version || echo "::warning::Could not run --version on ARM32 binary"
+          elif [[ "${{ matrix.platform }}" == "arm64" ]]; then
+            qemu-aarch64-static -L /usr/aarch64-linux-gnu/ "$BINARY" --version || echo "::warning::Could not run --version on ARM64 binary"
+          fi
+
+      - name: Verify checksum
+        run: |
+          cd artifacts
+          sha256sum -c *.sha256

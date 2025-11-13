@@ -1,0 +1,83 @@
+# Cross-compilation configuration for PicoFlow
+# Supports: ARM32, ARM64, x86_64 Linux targets
+
+# ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4 in 32-bit mode)
+[target.armv7-unknown-linux-gnueabihf]
+linker = "arm-linux-gnueabihf-gcc"
+rustflags = [
+    "-C", "target-feature=+v7,+vfp4,+neon",  # Optimize for ARMv7 with NEON
+    "-C", "link-arg=-fuse-ld=lld",           # Use LLD for faster linking
+]
+
+# ARM 64-bit (Raspberry Pi 4/5, modern SBCs)
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+rustflags = [
+    "-C", "target-feature=+neon",            # Enable NEON SIMD
+    "-C", "link-arg=-fuse-ld=lld",           # Use LLD for faster linking
+]
+
+# x86_64 Linux (Standard Linux servers, dev machines)
+[target.x86_64-unknown-linux-gnu]
+linker = "gcc"
+rustflags = [
+    "-C", "target-cpu=x86-64",               # Generic x86_64 compatibility
+    "-C", "link-arg=-fuse-ld=lld",           # Use LLD for faster linking
+]
+
+# Build settings for all targets
+[build]
+# Parallel compilation (adjust based on CPU cores)
+jobs = 4
+
+# Target directory
+target-dir = "target"
+
+# Incremental compilation for dev builds
+incremental = true
+
+# Profile overrides for size optimization
+[profile.release]
+opt-level = "z"           # Optimize aggressively for size
+lto = "fat"               # Full link-time optimization
+codegen-units = 1         # Single codegen unit for maximum optimization
+strip = true              # Strip debug symbols
+panic = "abort"           # Abort on panic (smaller binary)
+overflow-checks = false   # Disable overflow checks in release
+
+# Profile for binary size analysis
+[profile.release-size]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+# Profile for performance benchmarking
+[profile.release-perf]
+inherits = "release"
+opt-level = 3             # Optimize for speed, not size
+lto = "fat"
+codegen-units = 1
+strip = false             # Keep symbols for profiling
+debug = true              # Enable debug info for profiling
+
+# Cargo aliases for convenience
+[alias]
+# Build for ARM 32-bit
+build-arm32 = "build --release --target armv7-unknown-linux-gnueabihf"
+# Build for ARM 64-bit
+build-arm64 = "build --release --target aarch64-unknown-linux-gnu"
+# Build for x86_64
+build-x86 = "build --release --target x86_64-unknown-linux-gnu"
+# Build for all platforms
+build-all = "build --release --target armv7-unknown-linux-gnueabihf --target aarch64-unknown-linux-gnu --target x86_64-unknown-linux-gnu"
+
+# Network settings
+[net]
+git-fetch-with-cli = true
+
+# Registry settings
+[registry]
+default = "crates-io"

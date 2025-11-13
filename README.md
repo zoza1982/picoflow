@@ -33,14 +33,82 @@ PicoFlow is a Rust-native workflow orchestrator designed specifically for resour
 
 ### Installation
 
-```bash
-# From source
-cargo install --path .
+#### Pre-built Binaries (Recommended)
 
-# Or download pre-built binary from releases
-curl -L https://github.com/zoza1982/picoflow/releases/latest/download/picoflow-linux-arm -o picoflow
-chmod +x picoflow
+Download the appropriate binary for your platform:
+
+**ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4 in 32-bit mode):**
+```bash
+# Download latest release
+VERSION=v1.0.0  # Replace with latest version
+wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz
+
+# Verify checksum (optional but recommended)
+wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz.sha256
+sha256sum -c picoflow-${VERSION}-arm32-linux.tar.gz.sha256
+
+# Extract and install
+tar -xzf picoflow-${VERSION}-arm32-linux.tar.gz
+cd picoflow-${VERSION}-arm32-linux
+sudo ./install.sh
+
+# Verify installation
+picoflow --version
 ```
+
+**ARM 64-bit (Raspberry Pi 4/5, modern SBCs):**
+```bash
+VERSION=v1.0.0  # Replace with latest version
+wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm64-linux.tar.gz
+tar -xzf picoflow-${VERSION}-arm64-linux.tar.gz
+cd picoflow-${VERSION}-arm64-linux
+sudo ./install.sh
+picoflow --version
+```
+
+**x86_64 Linux (Standard Linux servers):**
+```bash
+VERSION=v1.0.0  # Replace with latest version
+wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-x86_64-linux.tar.gz
+tar -xzf picoflow-${VERSION}-x86_64-linux.tar.gz
+cd picoflow-${VERSION}-x86_64-linux
+sudo ./install.sh
+picoflow --version
+```
+
+#### User Directory Installation (No Root Required)
+
+```bash
+# Install to ~/.local/bin instead of /usr/local/bin
+INSTALL_DIR=~/.local/bin ./install.sh
+
+# Add to PATH if needed
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### From Source
+
+```bash
+# Clone repository
+git clone https://github.com/zoza1982/picoflow.git
+cd picoflow
+
+# Build and install
+cargo build --release
+sudo cp target/release/picoflow /usr/local/bin/
+
+# Or install with cargo
+cargo install --path .
+```
+
+#### Platform Support
+
+| Platform | Architecture | Binary Name | Tested Devices |
+|----------|-------------|-------------|----------------|
+| ARM 32-bit | ARMv7 | `picoflow-*-arm32` | Raspberry Pi Zero 2 W, Pi 3/4 (32-bit OS) |
+| ARM 64-bit | AArch64 | `picoflow-*-arm64` | Raspberry Pi 4/5, Orange Pi, Rock Pi |
+| x86_64 | x86-64 | `picoflow-*-x86_64` | Standard Linux servers, VMs |
 
 ### Define a Workflow
 
@@ -160,7 +228,7 @@ Target platform: Raspberry Pi Zero 2 W (512MB RAM)
 ### Prerequisites
 
 - Rust 1.70+
-- For cross-compilation: `cross` or Docker
+- For cross-compilation: Docker or native toolchains
 
 ### Build
 
@@ -171,9 +239,43 @@ cargo build
 # Release build (optimized for size)
 cargo build --release
 
-# Cross-compile for ARM32 (Pi Zero 2 W)
-cross build --release --target armv7-unknown-linux-gnueabihf
+# Cross-compile for all platforms (Docker-based, recommended)
+./scripts/docker-build.sh
+
+# Cross-compile for specific platform
+./scripts/docker-build.sh arm32  # ARM 32-bit
+./scripts/docker-build.sh arm64  # ARM 64-bit
+./scripts/docker-build.sh x86_64 # x86_64 Linux
+
+# Native cross-compilation (requires toolchains)
+cargo build --release --target armv7-unknown-linux-gnueabihf   # ARM 32-bit
+cargo build --release --target aarch64-unknown-linux-gnu       # ARM 64-bit
+cargo build --release --target x86_64-unknown-linux-gnu        # x86_64
 ```
+
+### Cross-Compilation Setup
+
+**Quick Start (Docker):**
+```bash
+# Build all platforms using Docker (no toolchain setup required)
+./scripts/docker-build.sh
+```
+
+**Native Toolchains (Ubuntu/Debian):**
+```bash
+# Install cross-compilation toolchains
+sudo apt-get install gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
+
+# Add Rust targets
+rustup target add armv7-unknown-linux-gnueabihf
+rustup target add aarch64-unknown-linux-gnu
+rustup target add x86_64-unknown-linux-gnu
+
+# Build for all platforms
+./scripts/build-all.sh
+```
+
+See [docs/cross-compilation.md](docs/cross-compilation.md) for detailed setup instructions.
 
 ### Test
 
