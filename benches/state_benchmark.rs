@@ -18,7 +18,7 @@ fn bench_workflow_creation(c: &mut Criterion) {
 
     group.bench_function("create_workflow", |b| {
         b.iter_batched(
-            || create_temp_state_manager(),
+            create_temp_state_manager,
             |(manager, _temp_dir)| {
                 let workflow_id = manager
                     .get_or_create_workflow(
