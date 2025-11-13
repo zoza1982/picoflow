@@ -6,7 +6,6 @@
 linker = "arm-linux-gnueabihf-gcc"
 rustflags = [
     "-C", "target-feature=+v7,+vfp4,+neon",  # Optimize for ARMv7 with NEON
-    "-C", "link-arg=-fuse-ld=lld",           # Use LLD for faster linking
 ]
 
 # ARM 64-bit (Raspberry Pi 4/5, modern SBCs)
@@ -14,7 +13,6 @@ rustflags = [
 linker = "aarch64-linux-gnu-gcc"
 rustflags = [
     "-C", "target-feature=+neon",            # Enable NEON SIMD
-    "-C", "link-arg=-fuse-ld=lld",           # Use LLD for faster linking
 ]
 
 # x86_64 Linux (Standard Linux servers, dev machines)
@@ -22,7 +20,6 @@ rustflags = [
 linker = "gcc"
 rustflags = [
     "-C", "target-cpu=x86-64",               # Generic x86_64 compatibility
-    "-C", "link-arg=-fuse-ld=lld",           # Use LLD for faster linking
 ]
 
 # Build settings for all targets
