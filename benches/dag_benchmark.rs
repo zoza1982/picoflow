@@ -190,17 +190,13 @@ fn bench_cycle_detection(c: &mut Criterion) {
     let mut group = c.benchmark_group("cycle_detection");
 
     for size in [10, 50, 100].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("acyclic", size),
-            size,
-            |b, &size| {
-                let tasks = create_linear_chain(size);
-                b.iter(|| {
-                    let dag = DagEngine::build(black_box(&tasks)).unwrap();
-                    dag.validate_acyclic().unwrap();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("acyclic", size), size, |b, &size| {
+            let tasks = create_linear_chain(size);
+            b.iter(|| {
+                let dag = DagEngine::build(black_box(&tasks)).unwrap();
+                dag.validate_acyclic().unwrap();
+            });
+        });
     }
 
     group.finish();
@@ -212,32 +208,24 @@ fn bench_parallel_levels(c: &mut Criterion) {
 
     // Linear chain (worst case - no parallelism)
     for size in [10, 50, 100].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("linear", size),
-            size,
-            |b, &size| {
-                let tasks = create_linear_chain(size);
-                let dag = DagEngine::build(&tasks).unwrap();
-                b.iter(|| {
-                    let _levels = dag.parallel_levels();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("linear", size), size, |b, &size| {
+            let tasks = create_linear_chain(size);
+            let dag = DagEngine::build(&tasks).unwrap();
+            b.iter(|| {
+                let _levels = dag.parallel_levels();
+            });
+        });
     }
 
     // Diamond pattern (moderate parallelism)
     for layers in [5, 10, 15].iter() {
-        group.bench_with_input(
-            BenchmarkId::new("diamond", layers),
-            layers,
-            |b, &layers| {
-                let tasks = create_diamond_dag(layers);
-                let dag = DagEngine::build(&tasks).unwrap();
-                b.iter(|| {
-                    let _levels = dag.parallel_levels();
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("diamond", layers), layers, |b, &layers| {
+            let tasks = create_diamond_dag(layers);
+            let dag = DagEngine::build(&tasks).unwrap();
+            b.iter(|| {
+                let _levels = dag.parallel_levels();
+            });
+        });
     }
 
     // Wide parallel (maximum parallelism)

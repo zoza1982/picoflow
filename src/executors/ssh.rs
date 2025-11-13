@@ -117,14 +117,12 @@ impl SshExecutor {
         debug!("Verifying host key for {}", config.host);
 
         // Get known_hosts file path
-        let known_hosts_path = Self::get_known_hosts_path().ok_or_else(|| {
-            PicoFlowError::Ssh {
-                host: config.host.clone(),
-                message: "known_hosts file not found at ~/.ssh/known_hosts. \
+        let known_hosts_path = Self::get_known_hosts_path().ok_or_else(|| PicoFlowError::Ssh {
+            host: config.host.clone(),
+            message: "known_hosts file not found at ~/.ssh/known_hosts. \
                          Please run 'ssh-keyscan <host> >> ~/.ssh/known_hosts' or \
                          set verify_host_key: false (NOT recommended for production)"
-                    .to_string(),
-            }
+                .to_string(),
         })?;
 
         debug!("Using known_hosts file: {:?}", known_hosts_path);

@@ -92,7 +92,10 @@ fn bench_execution_management(c: &mut Criterion) {
             },
             |(manager, execution_id, _temp_dir)| {
                 manager
-                    .update_execution_status(black_box(execution_id), black_box(TaskStatus::Success))
+                    .update_execution_status(
+                        black_box(execution_id),
+                        black_box(TaskStatus::Success),
+                    )
                     .unwrap();
             },
             criterion::BatchSize::SmallInput,
@@ -136,9 +139,7 @@ fn bench_task_execution_records(c: &mut Criterion) {
                     .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
                     .unwrap();
                 let execution_id = manager.start_execution(workflow_id).unwrap();
-                let task_id = manager
-                    .start_task(execution_id, "test_task", 1)
-                    .unwrap();
+                let task_id = manager.start_task(execution_id, "test_task", 1).unwrap();
                 (manager, task_id, temp_dir)
             },
             |(manager, task_id, _temp_dir)| {
@@ -180,7 +181,9 @@ fn bench_execution_history_queries(c: &mut Criterion) {
             } else {
                 TaskStatus::Success
             };
-            manager.update_execution_status(execution_id, status).unwrap();
+            manager
+                .update_execution_status(execution_id, status)
+                .unwrap();
 
             // Add some tasks
             for j in 0..5 {
@@ -238,7 +241,9 @@ fn bench_execution_history_queries(c: &mut Criterion) {
                         (manager, execution_id, temp_dir)
                     },
                     |(manager, execution_id, _temp_dir)| {
-                        let _tasks = manager.get_task_executions(black_box(execution_id)).unwrap();
+                        let _tasks = manager
+                            .get_task_executions(black_box(execution_id))
+                            .unwrap();
                         // May be empty if it's a new execution
                     },
                     criterion::BatchSize::SmallInput,
@@ -275,13 +280,17 @@ fn bench_workflow_statistics(c: &mut Criterion) {
                             } else {
                                 TaskStatus::Success
                             };
-                            manager.update_execution_status(execution_id, status).unwrap();
+                            manager
+                                .update_execution_status(execution_id, status)
+                                .unwrap();
                         }
 
                         (manager, temp_dir)
                     },
                     |(manager, _temp_dir)| {
-                        let stats = manager.get_workflow_statistics(black_box("test_workflow")).unwrap();
+                        let stats = manager
+                            .get_workflow_statistics(black_box("test_workflow"))
+                            .unwrap();
                         assert!(stats.total_executions > 0);
                     },
                     criterion::BatchSize::SmallInput,

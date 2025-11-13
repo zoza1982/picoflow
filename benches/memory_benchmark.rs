@@ -52,8 +52,5 @@ fn bench_dag_memory_allocation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_dag_memory_allocation,
-);
+criterion_group!(benches, bench_dag_memory_allocation,);
 criterion_main!(benches);

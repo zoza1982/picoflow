@@ -98,9 +98,8 @@ impl HttpExecutor {
     ///
     /// Returns error if URL targets a blocked address or domain
     fn validate_ssrf(url: &str, allow_private_ips: bool) -> Result<()> {
-        let parsed_url = reqwest::Url::parse(url).map_err(|e| {
-            PicoFlowError::Validation(format!("Invalid URL for SSRF check: {}", e))
-        })?;
+        let parsed_url = reqwest::Url::parse(url)
+            .map_err(|e| PicoFlowError::Validation(format!("Invalid URL for SSRF check: {}", e)))?;
 
         // Only allow HTTP and HTTPS schemes
         let scheme = parsed_url.scheme();
@@ -112,9 +111,9 @@ impl HttpExecutor {
         }
 
         // Get host from URL
-        let host = parsed_url.host().ok_or_else(|| {
-            PicoFlowError::Validation("URL must contain a host".to_string())
-        })?;
+        let host = parsed_url
+            .host()
+            .ok_or_else(|| PicoFlowError::Validation("URL must contain a host".to_string()))?;
 
         match host {
             Host::Ipv4(ip) => {
@@ -204,10 +203,10 @@ impl HttpExecutor {
         // List of blocked domains (cloud metadata services and localhost aliases)
         let blocked_domains = [
             "localhost",
-            "metadata.google.internal",     // GCP metadata
-            "169.254.169.254",              // AWS/Azure metadata (IP as domain)
-            "metadata",                     // Generic metadata alias
-            "instance-data",                // AWS IMDSv1
+            "metadata.google.internal", // GCP metadata
+            "169.254.169.254",          // AWS/Azure metadata (IP as domain)
+            "metadata",                 // Generic metadata alias
+            "instance-data",            // AWS IMDSv1
         ];
 
         let domain_lower = domain.to_lowercase();

@@ -247,7 +247,7 @@ async fn test_http_timeout() {
         method: HttpMethod::Get,
         body: None,
         headers: HashMap::new(),
-        timeout: 1, // 1 second timeout
+        timeout: 1,              // 1 second timeout
         allow_private_ips: true, // Allow localhost for testing
     });
 

@@ -234,22 +234,20 @@ fn create_complex_dag_workflow() -> WorkflowConfig {
 
 /// Create a parallel workflow (N tasks that can run concurrently)
 fn create_parallel_workflow(task_count: usize, max_parallel: usize) -> WorkflowConfig {
-    let mut tasks = vec![
-        TaskConfig {
-            name: "start".to_string(),
-            task_type: TaskType::Shell,
-            depends_on: vec![],
-            config: TaskExecutorConfig::Shell(ShellConfig {
-                command: "/bin/echo".to_string(),
-                args: vec!["Start".to_string()],
-                workdir: None,
-                env: None,
-            }),
-            retry: Some(0),
-            timeout: Some(30),
-            continue_on_failure: false,
-        },
-    ];
+    let mut tasks = vec![TaskConfig {
+        name: "start".to_string(),
+        task_type: TaskType::Shell,
+        depends_on: vec![],
+        config: TaskExecutorConfig::Shell(ShellConfig {
+            command: "/bin/echo".to_string(),
+            args: vec!["Start".to_string()],
+            workdir: None,
+            env: None,
+        }),
+        retry: Some(0),
+        timeout: Some(30),
+        continue_on_failure: false,
+    }];
 
     for i in 0..task_count {
         tasks.push(TaskConfig {
@@ -343,7 +341,7 @@ fn bench_simple_sequential_workflow(c: &mut Criterion) {
     let mut group = c.benchmark_group("simple_sequential_workflow");
 
     group.bench_function("3_tasks", |b| {
-        b  .iter_batched(
+        b.iter_batched(
             || {
                 let workflow = create_simple_sequential_workflow();
                 let temp_dir = TempDir::new().unwrap();
@@ -374,7 +372,7 @@ fn bench_complex_dag_workflow(c: &mut Criterion) {
     let mut group = c.benchmark_group("complex_dag_workflow");
 
     group.bench_function("10_tasks_parallel", |b| {
-        b  .iter_batched(
+        b.iter_batched(
             || {
                 let workflow = create_complex_dag_workflow();
                 let temp_dir = TempDir::new().unwrap();
@@ -413,7 +411,7 @@ fn bench_parallel_workflow_execution(c: &mut Criterion) {
             ),
             &(*task_count, *max_parallel),
             |b, &(tasks, parallel)| {
-                b  .iter_batched(
+                b.iter_batched(
                     || {
                         let workflow = create_parallel_workflow(tasks, parallel);
                         let temp_dir = TempDir::new().unwrap();
@@ -453,7 +451,7 @@ fn bench_large_sequential_workflow(c: &mut Criterion) {
             BenchmarkId::from_parameter(task_count),
             task_count,
             |b, &count| {
-                b  .iter_batched(
+                b.iter_batched(
                     || {
                         let workflow = create_large_sequential_workflow(count);
                         let temp_dir = TempDir::new().unwrap();
@@ -517,8 +515,7 @@ tasks:
 
     group.bench_function("parse_simple_workflow", |b| {
         b.iter(|| {
-            let _workflow: WorkflowConfig =
-                serde_yaml::from_str(black_box(simple_yaml)).unwrap();
+            let _workflow: WorkflowConfig = serde_yaml::from_str(black_box(simple_yaml)).unwrap();
         });
     });
 
@@ -597,8 +594,7 @@ tasks:
 
     group.bench_function("parse_complex_workflow", |b| {
         b.iter(|| {
-            let _workflow: WorkflowConfig =
-                serde_yaml::from_str(black_box(complex_yaml)).unwrap();
+            let _workflow: WorkflowConfig = serde_yaml::from_str(black_box(complex_yaml)).unwrap();
         });
     });
 
@@ -624,7 +620,7 @@ tasks:
 "#;
 
     group.bench_function("single_task_total_overhead", |b| {
-        b  .iter_batched(
+        b.iter_batched(
             || {
                 let temp_dir = TempDir::new().unwrap();
                 let db_path = temp_dir.path().join("bench.db");

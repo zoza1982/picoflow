@@ -198,7 +198,9 @@ fn bench_parallel_execution(c: &mut Criterion) {
                         let results = futures::future::join_all(futures).await;
                         for result in results {
                             assert!(result.is_ok());
-                            assert!(result.unwrap().status == picoflow::models::TaskStatus::Success);
+                            assert!(
+                                result.unwrap().status == picoflow::models::TaskStatus::Success
+                            );
                         }
                     })
                 });
