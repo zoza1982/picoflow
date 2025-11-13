@@ -58,6 +58,22 @@ wiremock = "0.6"
 name = "dag_benchmark"
 harness = false
 
+[[bench]]
+name = "task_benchmark"
+harness = false
+
+[[bench]]
+name = "state_benchmark"
+harness = false
+
+[[bench]]
+name = "memory_benchmark"
+harness = false
+
+[[bench]]
+name = "workflow_benchmark"
+harness = false
+
 [profile.release]
 opt-level = "z"     # Optimize for size
 lto = true          # Enable link-time optimization
