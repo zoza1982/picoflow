@@ -60,7 +60,7 @@ venv/
 env/
 
 # Cargo cache (will be rebuilt)
-.cargo/
+# .cargo/ - KEEP: needed for cross-compilation config (.cargo/config.toml)
 Cargo.lock
 
 # Release artifacts
