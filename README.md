@@ -211,7 +211,7 @@ Comprehensive documentation is available:
 
 Current measurements (v1.0):
 
-- **Binary size**: 3.0MB (stripped) - 70% under 10MB target ✅
+- **Binary size**: 6.0MB (stripped, with vendored OpenSSL) - 40% under 10MB target ✅
 - **Memory (idle)**: <20MB RSS ✅
 - **Memory (10 parallel tasks)**: <50MB RSS ✅
 - **Tests**: 100% passing ✅
