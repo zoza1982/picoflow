@@ -18,6 +18,23 @@
 
 set -eo pipefail
 
+# Ensure Rust toolchain is in PATH
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# If rustup is installed via Homebrew, ensure its bin is in PATH
+if [[ -d "/opt/homebrew/bin" ]]; then
+    export PATH="/opt/homebrew/bin:$PATH"
+fi
+
+# Get the active rustup toolchain bin directory and add to PATH
+if command -v rustup &> /dev/null; then
+    RUSTC_PATH=$(rustup which rustc 2>/dev/null || echo "")
+    if [[ -n "$RUSTC_PATH" ]]; then
+        RUST_BIN_DIR=$(dirname "$RUSTC_PATH")
+        export PATH="$RUST_BIN_DIR:$PATH"
+    fi
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -147,7 +164,20 @@ check_linkers() {
         done
         echo ""
 
-        # Check if cross is available (check PATH and ~/.cargo/bin)
+        # On macOS, recommend Docker build script instead of cross
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            log_error "Native linkers not available on macOS"
+            echo ""
+            log_info "Recommended: Use Docker build script (works on all platforms)"
+            echo "  ./scripts/docker-build.sh"
+            echo ""
+            log_info "Alternative: Install native linkers via Homebrew"
+            echo "  brew tap messense/macos-cross-toolchains"
+            echo "  brew install arm-unknown-linux-gnueabihf aarch64-unknown-linux-gnu"
+            return 1
+        fi
+
+        # On Linux, check if cross is available
         if command -v cross &> /dev/null || [[ -x "$HOME/.cargo/bin/cross" ]]; then
             log_info "Using 'cross' for Docker-based cross-compilation"
             USE_CROSS=true
@@ -159,7 +189,6 @@ check_linkers() {
             echo ""
             log_info "Option 1 - Install native linkers:"
             echo "  Ubuntu/Debian: sudo apt-get install gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu"
-            echo "  macOS: brew install arm-linux-gnueabihf-binutils aarch64-linux-gnu-binutils"
             echo ""
             log_info "Option 2 - Install cross (Docker-based):"
             echo "  cargo install cross --git https://github.com/cross-rs/cross"
