@@ -28,6 +28,7 @@ NC='\033[0m' # No Color
 # Build configuration
 BUILD_TYPE="release"
 VERBOSE=""
+USE_CROSS=false
 TARGETS=(
     "armv7-unknown-linux-gnueabihf"
     "aarch64-unknown-linux-gnu"
@@ -140,17 +141,33 @@ check_linkers() {
     fi
 
     if [[ ${#missing_linkers[@]} -gt 0 ]]; then
-        log_error "Missing cross-compilation linkers:"
+        log_warning "Missing cross-compilation linkers:"
         for linker in "${missing_linkers[@]}"; do
             echo "  - $linker"
         done
         echo ""
-        log_info "Install instructions:"
-        echo "  Ubuntu/Debian: sudo apt-get install gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu"
-        echo "  macOS: brew install arm-linux-gnueabihf-binutils aarch64-linux-gnu-binutils"
-        echo ""
-        log_warning "Alternatively, use Docker-based builds: ./scripts/docker-build.sh"
-        return 1
+
+        # Check if cross is available (check PATH and ~/.cargo/bin)
+        if command -v cross &> /dev/null || [[ -x "$HOME/.cargo/bin/cross" ]]; then
+            log_info "Using 'cross' for Docker-based cross-compilation"
+            USE_CROSS=true
+            # Ensure ~/.cargo/bin is in PATH
+            export PATH="$HOME/.cargo/bin:$PATH"
+            return 0
+        else
+            log_error "Neither native linkers nor 'cross' are available"
+            echo ""
+            log_info "Option 1 - Install native linkers:"
+            echo "  Ubuntu/Debian: sudo apt-get install gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu"
+            echo "  macOS: brew install arm-linux-gnueabihf-binutils aarch64-linux-gnu-binutils"
+            echo ""
+            log_info "Option 2 - Install cross (Docker-based):"
+            echo "  cargo install cross --git https://github.com/cross-rs/cross"
+            echo ""
+            log_info "Option 3 - Use Docker build script:"
+            echo "  ./scripts/docker-build.sh"
+            return 1
+        fi
     else
         log_success "All required linkers are available"
     fi
@@ -169,8 +186,17 @@ build_target() {
         build_flags="--release"
     fi
 
-    # Build the binary
-    if cargo build $build_flags --target "$target" $VERBOSE; then
+    # Build the binary (use cross if enabled, otherwise cargo)
+    local build_cmd="cargo"
+    if [[ "$USE_CROSS" == true ]]; then
+        build_cmd="cross"
+        # Get the active toolchain for cross
+        local toolchain
+        toolchain=$(rustup show active-toolchain | awk '{print $1}')
+        export CROSS_CUSTOM_TOOLCHAIN=1
+    fi
+
+    if $build_cmd build $build_flags --target "$target" $VERBOSE; then
         log_success "Build completed for $platform_name"
 
         # Get binary path
