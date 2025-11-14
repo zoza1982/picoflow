@@ -29,11 +29,17 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libssl-dev:armhf \
     libssl-dev:arm64 \
+    perl \
     curl \
     git \
     make \
     bc \
     && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for cross-compilation
+ENV PKG_CONFIG_ALLOW_CROSS=1
+ENV OPENSSL_DIR=/usr
+ENV OPENSSL_STATIC=1
 
 # Install Rust targets
 RUN rustup target add \
@@ -62,6 +68,22 @@ build_target() {
     echo "========================================"
     echo "Building for $platform ($target)"
     echo "========================================"
+
+    # Set target-specific environment variables for cross-compilation
+    case "$target" in
+        armv7-unknown-linux-gnueabihf)
+            export CC_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-gcc
+            export CXX_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-g++
+            export AR_armv7_unknown_linux_gnueabihf=arm-linux-gnueabihf-ar
+            export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc
+            ;;
+        aarch64-unknown-linux-gnu)
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
+            export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+            ;;
+    esac
 
     cargo build --release --target "$target" --locked
 
