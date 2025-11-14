@@ -16,7 +16,7 @@
 #   ./scripts/build-release.sh v1.0.0    # Override version
 #
 
-set -euo pipefail
+set -eo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -33,11 +33,26 @@ TARGETS=(
     "x86_64-unknown-linux-gnu"
 )
 
-declare -A PLATFORM_NAMES=(
-    ["armv7-unknown-linux-gnueabihf"]="arm32"
-    ["aarch64-unknown-linux-gnu"]="arm64"
-    ["x86_64-unknown-linux-gnu"]="x86_64"
-)
+# Now enable nounset
+set -u
+
+# Helper function to get platform name (Bash 3.2 compatible - no associative arrays)
+get_platform_name() {
+    case "$1" in
+        "armv7-unknown-linux-gnueabihf")
+            echo "arm32"
+            ;;
+        "aarch64-unknown-linux-gnu")
+            echo "arm64"
+            ;;
+        "x86_64-unknown-linux-gnu")
+            echo "x86_64"
+            ;;
+        *)
+            echo "unknown"
+            ;;
+    esac
+}
 
 # Output directory
 OUTPUT_DIR="target/release-binaries"
@@ -109,7 +124,8 @@ clean_builds() {
 # Build for a specific target
 build_target() {
     local target=$1
-    local platform_name="${PLATFORM_NAMES[$target]}"
+    local platform_name
+    platform_name=$(get_platform_name "$target")
 
     log_info "Building release binary for $target..."
 
@@ -197,7 +213,8 @@ EOF
 
     local first=true
     for target in "${TARGETS[@]}"; do
-        local platform_name="${PLATFORM_NAMES[$target]}"
+        local platform_name
+    platform_name=$(get_platform_name "$target")
         local binary="$OUTPUT_DIR/picoflow-$VERSION-$platform_name"
 
         if [[ -f "$binary" ]]; then
@@ -253,7 +270,8 @@ print_summary() {
     echo "Binaries:"
 
     for target in "${TARGETS[@]}"; do
-        local platform_name="${PLATFORM_NAMES[$target]}"
+        local platform_name
+    platform_name=$(get_platform_name "$target")
         local binary="$OUTPUT_DIR/picoflow-$VERSION-$platform_name"
 
         if [[ -f "$binary" ]]; then
@@ -303,7 +321,8 @@ main() {
 
     # Verify binaries
     for target in "${TARGETS[@]}"; do
-        local platform_name="${PLATFORM_NAMES[$target]}"
+        local platform_name
+    platform_name=$(get_platform_name "$target")
         local binary="$OUTPUT_DIR/picoflow-$VERSION-$platform_name"
         if [[ -f "$binary" ]]; then
             verify_binary "$binary" "$target"
