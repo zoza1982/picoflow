@@ -15,16 +15,20 @@
 # This ensures gcc is x86_64-linux-gnu-gcc (native) which is needed for x86_64 builds
 FROM --platform=linux/amd64 rust:1.75-slim as builder
 
+# Enable multiarch for cross-compilation
+RUN dpkg --add-architecture armhf && \
+    dpkg --add-architecture arm64
+
 # Install cross-compilation dependencies
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
-    gcc-arm-linux-gnueabihf \
-    g++-arm-linux-gnueabihf \
-    gcc-aarch64-linux-gnu \
-    g++-aarch64-linux-gnu \
+    crossbuild-essential-armhf \
+    crossbuild-essential-arm64 \
     pkg-config \
     libssl-dev \
+    libssl-dev:armhf \
+    libssl-dev:arm64 \
     curl \
     git \
     make \
