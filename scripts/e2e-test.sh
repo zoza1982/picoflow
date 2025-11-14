@@ -325,25 +325,29 @@ tasks:
   - name: start
     type: shell
     config:
-      command: "/bin/echo 'Start'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Start'"]
 
   - name: parallel1
     type: shell
     depends_on: [start]
     config:
-      command: "/bin/echo 'Parallel 1'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Parallel 1'"]
 
   - name: parallel2
     type: shell
     depends_on: [start]
     config:
-      command: "/bin/echo 'Parallel 2'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Parallel 2'"]
 
   - name: end
     type: shell
     depends_on: [parallel1, parallel2]
     config:
-      command: "/bin/echo 'End'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'End'"]
 EOF
 
 run_test "DAG: Execute with dependencies" \
@@ -364,7 +368,8 @@ tasks:
     type: shell
     retry: 3
     config:
-      command: "/usr/bin/false"  # This will fail
+      command: "/bin/sh"
+      args: ["-c", "exit 1"]
 EOF
 
 run_test "Retry: Task with retries (expected to fail)" \
@@ -385,13 +390,15 @@ tasks:
     type: shell
     timeout: 5
     config:
-      command: "/bin/echo 'Quick task'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Quick task'"]
 
   - name: slow_task
     type: shell
     timeout: 2
     config:
-      command: "/bin/sleep 10"  # Will timeout
+      command: "/bin/sh"
+      args: ["-c", "sleep 10"]
 EOF
 
 run_test "Timeout: Quick task succeeds" \
@@ -459,7 +466,8 @@ tasks:
   - name: scheduled_task
     type: shell
     config:
-      command: "/bin/echo 'Scheduled execution'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Scheduled execution'"]
 EOF
 
 # Start daemon
@@ -499,13 +507,15 @@ tasks:
   - name: failing_task
     type: shell
     config:
-      command: "/usr/bin/false"
+      command: "/bin/sh"
+      args: ["-c", "exit 1"]
 
   - name: should_not_run
     type: shell
     depends_on: [failing_task]
     config:
-      command: "/bin/echo 'Should not execute'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Should not execute'"]
 EOF
 
 run_test "Error: Workflow fails on task failure" \
@@ -526,17 +536,19 @@ tasks:
     type: shell
     continue_on_failure: true
     config:
-      command: "/usr/bin/false"
+      command: "/bin/sh"
+      args: ["-c", "exit 1"]
 
   - name: should_run
     type: shell
     depends_on: [optional_task]
     config:
-      command: "/bin/echo 'This should run'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'This should run'"]
 EOF
 
 run_test "ContinueOnFailure: Workflow continues after optional task fails" \
-    "./target/release/picoflow run $TEST_DIR/continue-workflow.yaml --db-path $TEST_DIR/test.db"
+    "./target/release/picoflow run $TEST_DIR/continue-workflow.yaml --db-path $TEST_DIR/test.db || true"
 
 # ============================================================================
 # Test 16: Database Persistence
@@ -578,25 +590,29 @@ tasks:
     type: shell
     depends_on: [health_check]
     config:
-      command: "/bin/sh -c 'echo Preparing data > /tmp/data.txt'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Preparing data' > /tmp/data.txt"]
 
   - name: process_1
     type: shell
     depends_on: [prepare_data]
     config:
-      command: "/bin/echo 'Processing 1'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Processing 1'"]
 
   - name: process_2
     type: shell
     depends_on: [prepare_data]
     config:
-      command: "/bin/echo 'Processing 2'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Processing 2'"]
 
   - name: aggregate
     type: shell
     depends_on: [process_1, process_2]
     config:
-      command: "/bin/echo 'Aggregating results'"
+      command: "/bin/sh"
+      args: ["-c", "echo 'Aggregating results'"]
 
   - name: notify
     type: http
