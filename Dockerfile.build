@@ -11,7 +11,9 @@
 #   docker run --rm -v $(pwd):/workspace picoflow-builder arm64
 #   docker run --rm -v $(pwd):/workspace picoflow-builder x86_64
 
-FROM rust:1.75-slim as builder
+# Force x86_64 platform for consistent cross-compilation
+# This ensures gcc is x86_64-linux-gnu-gcc (native) which is needed for x86_64 builds
+FROM --platform=linux/amd64 rust:1.75-slim as builder
 
 # Install cross-compilation dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     make \
+    bc \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Rust targets
