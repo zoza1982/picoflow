@@ -13,7 +13,7 @@
 
 # Force x86_64 platform for consistent cross-compilation
 # This ensures gcc is x86_64-linux-gnu-gcc (native) which is needed for x86_64 builds
-FROM --platform=linux/amd64 rust:1.75-slim as builder
+FROM --platform=linux/amd64 rust:1.83-slim as builder
 
 # Enable multiarch for cross-compilation
 RUN dpkg --add-architecture armhf && \
