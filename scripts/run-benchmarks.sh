@@ -23,6 +23,23 @@
 
 set -euo pipefail
 
+# Ensure Rust toolchain is in PATH
+export PATH="$HOME/.cargo/bin:$PATH"
+
+# If rustup is installed via Homebrew, ensure its bin is in PATH
+if [[ -d "/opt/homebrew/bin" ]]; then
+    export PATH="/opt/homebrew/bin:$PATH"
+fi
+
+# Get the active rustup toolchain bin directory and add to PATH
+if command -v rustup &> /dev/null; then
+    RUSTC_PATH=$(rustup which rustc 2>/dev/null || echo "")
+    if [[ -n "$RUSTC_PATH" ]]; then
+        RUST_BIN_DIR=$(dirname "$RUSTC_PATH")
+        export PATH="$RUST_BIN_DIR:$PATH"
+    fi
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
