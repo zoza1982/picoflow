@@ -321,7 +321,7 @@ jobs:
       - name: Test binary
         run: |
           cd artifacts
-          BINARY=$(ls picoflow-*)
+          BINARY=$(ls picoflow-* | grep -v '.sha256')
           chmod +x "$BINARY"
 
           # Try to get version info
