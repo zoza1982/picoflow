@@ -16,7 +16,7 @@
 //! use std::path::PathBuf;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let state_manager = Arc::new(StateManager::new("picoflow.db")?);
+//! let state_manager = Arc::new(StateManager::new("picoflow.db").await?);
 //! let pid_file = PathBuf::from("/var/run/picoflow.pid");
 //!
 //! let mut daemon = Daemon::new(state_manager, pid_file).await?;
@@ -174,7 +174,7 @@ impl Daemon {
         let _guard = PidFileGuard { pid_file };
 
         // Recover from any crashed executions
-        let crashed = self.state_manager.recover_from_crash()?;
+        let crashed = self.state_manager.recover_from_crash().await?;
         if !crashed.is_empty() {
             warn!("Recovered {} crashed executions on startup", crashed.len());
         }
@@ -410,7 +410,7 @@ mod tests {
     async fn test_write_and_remove_pid_file() {
         let temp_dir = TempDir::new().unwrap();
         let pid_file = temp_dir.path().join("test.pid");
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
 
         let daemon = Daemon::new(state_manager, pid_file.clone()).await.unwrap();
 
@@ -436,7 +436,7 @@ mod tests {
         // Create fake PID file
         fs::write(&pid_file, "12345").unwrap();
 
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let result = Daemon::new(state_manager, pid_file).await;
 
         assert!(result.is_err());
@@ -447,7 +447,7 @@ mod tests {
     async fn test_daemon_lifecycle() {
         let temp_dir = TempDir::new().unwrap();
         let pid_file = temp_dir.path().join("test.pid");
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
 
         let mut daemon = Daemon::new(state_manager, pid_file.clone()).await.unwrap();
 

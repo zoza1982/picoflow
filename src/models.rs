@@ -88,16 +88,24 @@ pub enum TaskType {
 }
 
 /// Executor-specific configuration (enum for different task types)
+///
+/// Note: Uses untagged deserialization since the task type is specified
+/// separately in TaskConfig. Variants are ordered by specificity (most
+/// unique required fields first) for reliable deserialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TaskExecutorConfig {
-    Shell(ShellConfig),
+    /// SSH config requires host and user (most specific)
     Ssh(SshConfig),
+    /// HTTP config requires url (specific)
     Http(HttpConfig),
+    /// Shell config only requires command (least specific, must be last)
+    Shell(ShellConfig),
 }
 
 /// Shell executor configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ShellConfig {
     pub command: String, // Absolute path to binary
     #[serde(default)]
@@ -110,6 +118,7 @@ pub struct ShellConfig {
 
 /// SSH executor configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SshConfig {
     pub host: String,
     pub user: String,
@@ -128,6 +137,7 @@ fn default_verify_host_key() -> bool {
 
 /// HTTP executor configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpConfig {
     pub url: String,
     #[serde(default = "default_http_method")]

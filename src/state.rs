@@ -7,7 +7,8 @@ use crate::models::{
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
+use tokio::sync::{Mutex, MutexGuard};
 use tracing::debug;
 
 /// State manager for workflow and task execution tracking using SQLite.
@@ -35,21 +36,12 @@ pub struct StateManager {
 }
 
 impl StateManager {
-    /// Helper method to acquire mutex lock with proper poison error handling.
+    /// Helper method to acquire async mutex lock.
     ///
-    /// If the mutex is poisoned (another thread panicked while holding it),
-    /// we recover the data since SQLite operations are transactional and the
-    /// poisoned state doesn't corrupt the database.
-    fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>> {
-        match self.conn.lock() {
-            Ok(guard) => Ok(guard),
-            Err(poison) => {
-                // Mutex is poisoned, but SQLite state is still valid
-                // Recover the guard and log the error
-                tracing::warn!("Mutex was poisoned, recovering SQLite connection");
-                Ok(poison.into_inner())
-            }
-        }
+    /// Uses tokio::sync::Mutex for async-safe locking that won't cause
+    /// deadlocks when used in async contexts.
+    async fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>> {
+        Ok(self.conn.lock().await)
     }
 
     /// Create a new state manager with file-based SQLite database.
@@ -75,10 +67,12 @@ impl StateManager {
     /// ```no_run
     /// use picoflow::state::StateManager;
     ///
-    /// let manager = StateManager::new("/var/lib/picoflow/state.db")?;
-    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// # async fn example() -> picoflow::error::Result<()> {
+    /// let manager = StateManager::new("/var/lib/picoflow/state.db").await?;
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
+    pub async fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
         let db_path = db_path.as_ref();
 
         // Set restrictive permissions on database file if it doesn't exist yet
@@ -138,13 +132,13 @@ impl StateManager {
             conn: Arc::new(Mutex::new(conn)),
         };
 
-        manager.init_schema()?;
+        manager.init_schema().await?;
         Ok(manager)
     }
 
     /// Create in-memory database (for testing)
     #[cfg(test)]
-    pub fn in_memory() -> Result<Self> {
+    pub async fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
@@ -152,13 +146,13 @@ impl StateManager {
             conn: Arc::new(Mutex::new(conn)),
         };
 
-        manager.init_schema()?;
+        manager.init_schema().await?;
         Ok(manager)
     }
 
     /// Initialize database schema
-    fn init_schema(&self) -> Result<()> {
-        let conn = self.lock_conn()?;
+    async fn init_schema(&self) -> Result<()> {
+        let conn = self.lock_conn().await?;
 
         conn.execute_batch(
             "
@@ -242,8 +236,8 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Sqlite` - If database operation fails
-    pub fn get_or_create_workflow(&self, name: &str, schedule: Option<&str>) -> Result<i64> {
-        let conn = self.lock_conn()?;
+    pub async fn get_or_create_workflow(&self, name: &str, schedule: Option<&str>) -> Result<i64> {
+        let conn = self.lock_conn().await?;
 
         // Try to get existing workflow
         let existing: Option<i64> = conn
@@ -287,8 +281,8 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Sqlite` - If database operation fails
-    pub fn start_execution(&self, workflow_id: i64) -> Result<i64> {
-        let conn = self.lock_conn()?;
+    pub async fn start_execution(&self, workflow_id: i64) -> Result<i64> {
+        let conn = self.lock_conn().await?;
 
         conn.execute(
             "INSERT INTO executions (workflow_id, started_at, status) VALUES (?1, ?2, ?3)",
@@ -310,8 +304,12 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Sqlite` - If database operation fails
-    pub fn update_execution_status(&self, execution_id: i64, status: TaskStatus) -> Result<()> {
-        let conn = self.lock_conn()?;
+    pub async fn update_execution_status(
+        &self,
+        execution_id: i64,
+        status: TaskStatus,
+    ) -> Result<()> {
+        let conn = self.lock_conn().await?;
 
         conn.execute(
             "UPDATE executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
@@ -349,8 +347,13 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Sqlite` - If database operation fails
-    pub fn start_task(&self, execution_id: i64, task_name: &str, attempt: i32) -> Result<i64> {
-        let conn = self.lock_conn()?;
+    pub async fn start_task(
+        &self,
+        execution_id: i64,
+        task_name: &str,
+        attempt: i32,
+    ) -> Result<i64> {
+        let conn = self.lock_conn().await?;
 
         conn.execute(
             "INSERT INTO task_executions (execution_id, task_name, status, started_at, attempt) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -382,7 +385,7 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Sqlite` - If database operation fails
-    pub fn update_task_status(
+    pub async fn update_task_status(
         &self,
         task_execution_id: i64,
         status: TaskStatus,
@@ -390,7 +393,7 @@ impl StateManager {
         stdout: Option<&str>,
         stderr: Option<&str>,
     ) -> Result<()> {
-        let conn = self.lock_conn()?;
+        let conn = self.lock_conn().await?;
 
         conn.execute(
             "UPDATE task_executions SET status = ?1, completed_at = ?2, exit_code = ?3, stdout = ?4, stderr = ?5 WHERE id = ?6",
@@ -412,13 +415,13 @@ impl StateManager {
     }
 
     /// Set task retry information
-    pub fn set_task_retry(
+    pub async fn set_task_retry(
         &self,
         task_execution_id: i64,
         retry_count: i32,
         next_retry_at: DateTime<Utc>,
     ) -> Result<()> {
-        let conn = self.lock_conn()?;
+        let conn = self.lock_conn().await?;
 
         conn.execute(
             "UPDATE task_executions SET status = ?1, retry_count = ?2, next_retry_at = ?3 WHERE id = ?4",
@@ -434,8 +437,8 @@ impl StateManager {
     }
 
     /// Get execution by ID
-    pub fn get_execution(&self, execution_id: i64) -> Result<Option<WorkflowExecution>> {
-        let conn = self.lock_conn()?;
+    pub async fn get_execution(&self, execution_id: i64) -> Result<Option<WorkflowExecution>> {
+        let conn = self.lock_conn().await?;
 
         let result = conn
             .query_row(
@@ -457,8 +460,8 @@ impl StateManager {
     }
 
     /// Get task executions for a workflow execution
-    pub fn get_task_executions(&self, execution_id: i64) -> Result<Vec<TaskExecution>> {
-        let conn = self.lock_conn()?;
+    pub async fn get_task_executions(&self, execution_id: i64) -> Result<Vec<TaskExecution>> {
+        let conn = self.lock_conn().await?;
 
         let mut stmt = conn.prepare(
             "SELECT id, execution_id, task_name, status, started_at, completed_at, exit_code, stdout, stderr, attempt, retry_count, next_retry_at
@@ -508,13 +511,15 @@ impl StateManager {
     ///
     /// ```no_run
     /// # use picoflow::state::StateManager;
-    /// let manager = StateManager::new("/var/lib/picoflow/state.db")?;
-    /// let recovered = manager.recover_from_crash()?;
+    /// # async fn example() -> picoflow::error::Result<()> {
+    /// let manager = StateManager::new("/var/lib/picoflow/state.db").await?;
+    /// let recovered = manager.recover_from_crash().await?;
     /// println!("Recovered {} crashed executions", recovered.len());
-    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn recover_from_crash(&self) -> Result<Vec<i64>> {
-        let conn = self.lock_conn()?;
+    pub async fn recover_from_crash(&self) -> Result<Vec<i64>> {
+        let conn = self.lock_conn().await?;
 
         // Find executions that were running when process crashed
         let mut stmt = conn.prepare("SELECT id FROM executions WHERE status = ?1")?;
@@ -535,12 +540,12 @@ impl StateManager {
     }
 
     /// Get execution history for a workflow
-    pub fn get_execution_history(
+    pub async fn get_execution_history(
         &self,
         workflow_name: &str,
         limit: usize,
     ) -> Result<Vec<WorkflowExecution>> {
-        let conn = self.lock_conn()?;
+        let conn = self.lock_conn().await?;
 
         let mut stmt = conn.prepare(
             "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
@@ -580,13 +585,13 @@ impl StateManager {
     /// # Returns
     ///
     /// * `Ok(Vec<WorkflowExecution>)` - List of workflow executions matching the filter
-    pub fn get_execution_history_filtered(
+    pub async fn get_execution_history_filtered(
         &self,
         workflow_name: &str,
         status_filter: Option<&str>,
         limit: usize,
     ) -> Result<Vec<WorkflowExecution>> {
-        let conn = self.lock_conn()?;
+        let conn = self.lock_conn().await?;
 
         let (query, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) =
             if let Some(status) = status_filter {
@@ -655,8 +660,8 @@ impl StateManager {
     /// # Returns
     ///
     /// * `Ok(WorkflowStatistics)` - Aggregate statistics for the workflow
-    pub fn get_workflow_statistics(&self, workflow_name: &str) -> Result<WorkflowStatistics> {
-        let conn = self.lock_conn()?;
+    pub async fn get_workflow_statistics(&self, workflow_name: &str) -> Result<WorkflowStatistics> {
+        let conn = self.lock_conn().await?;
 
         let mut stmt = conn.prepare(
             "SELECT
@@ -727,8 +732,8 @@ impl StateManager {
     /// # Returns
     ///
     /// * `Ok(usize)` - Number of executions deleted
-    pub fn cleanup_old_executions(&self, retention_days: u32) -> Result<usize> {
-        let conn = self.lock_conn()?;
+    pub async fn cleanup_old_executions(&self, retention_days: u32) -> Result<usize> {
+        let conn = self.lock_conn().await?;
 
         let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
 
@@ -756,15 +761,17 @@ impl StateManager {
     ///
     /// ```no_run
     /// # use picoflow::state::StateManager;
-    /// let manager = StateManager::new("/var/lib/picoflow/state.db")?;
-    /// let workflows = manager.list_workflows()?;
+    /// # async fn example() -> picoflow::error::Result<()> {
+    /// let manager = StateManager::new("/var/lib/picoflow/state.db").await?;
+    /// let workflows = manager.list_workflows().await?;
     /// for workflow in workflows {
     ///     println!("{}: {} executions", workflow.name, workflow.execution_count);
     /// }
-    /// # Ok::<(), picoflow::error::PicoFlowError>(())
+    /// # Ok(())
+    /// # }
     /// ```
-    pub fn list_workflows(&self) -> Result<Vec<WorkflowSummary>> {
-        let conn = self.lock_conn()?;
+    pub async fn list_workflows(&self) -> Result<Vec<WorkflowSummary>> {
+        let conn = self.lock_conn().await?;
 
         let mut stmt = conn.prepare(
             "SELECT
@@ -816,60 +823,64 @@ fn parse_task_status(s: &str) -> TaskStatus {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_create_state_manager() {
-        let manager = StateManager::in_memory().unwrap();
-        assert!(manager.conn.lock().is_ok());
+    #[tokio::test]
+    async fn test_create_state_manager() {
+        let manager = StateManager::in_memory().await.unwrap();
+        // tokio::sync::Mutex doesn't need is_ok() check, just verify we can lock
+        let _guard = manager.conn.lock().await;
     }
 
-    #[test]
-    fn test_workflow_operations() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_workflow_operations() {
+        let manager = StateManager::in_memory().await.unwrap();
 
         // Create workflow
         let workflow_id = manager
             .get_or_create_workflow("test-workflow", None)
+            .await
             .unwrap();
         assert!(workflow_id > 0);
 
         // Get existing workflow
         let workflow_id2 = manager
             .get_or_create_workflow("test-workflow", None)
+            .await
             .unwrap();
         assert_eq!(workflow_id, workflow_id2);
     }
 
-    #[test]
-    fn test_execution_lifecycle() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_execution_lifecycle() {
+        let manager = StateManager::in_memory().await.unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
-        let execution_id = manager.start_execution(workflow_id).unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).await.unwrap();
+        let execution_id = manager.start_execution(workflow_id).await.unwrap();
 
         // Check execution status
-        let execution = manager.get_execution(execution_id).unwrap().unwrap();
+        let execution = manager.get_execution(execution_id).await.unwrap().unwrap();
         assert_eq!(execution.status, TaskStatus::Running);
         assert!(execution.completed_at.is_none());
 
         // Update to success
         manager
             .update_execution_status(execution_id, TaskStatus::Success)
+            .await
             .unwrap();
 
-        let execution = manager.get_execution(execution_id).unwrap().unwrap();
+        let execution = manager.get_execution(execution_id).await.unwrap().unwrap();
         assert_eq!(execution.status, TaskStatus::Success);
         assert!(execution.completed_at.is_some());
     }
 
-    #[test]
-    fn test_task_execution() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_task_execution() {
+        let manager = StateManager::in_memory().await.unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
-        let execution_id = manager.start_execution(workflow_id).unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).await.unwrap();
+        let execution_id = manager.start_execution(workflow_id).await.unwrap();
 
         // Start task
-        let task_id = manager.start_task(execution_id, "task1", 1).unwrap();
+        let task_id = manager.start_task(execution_id, "task1", 1).await.unwrap();
 
         // Update task status
         manager
@@ -880,10 +891,11 @@ mod tests {
                 Some("output"),
                 Some("error"),
             )
+            .await
             .unwrap();
 
         // Get task executions
-        let tasks = manager.get_task_executions(execution_id).unwrap();
+        let tasks = manager.get_task_executions(execution_id).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].task_name, "task1");
         assert_eq!(tasks[0].status, TaskStatus::Success);
@@ -891,69 +903,74 @@ mod tests {
         assert_eq!(tasks[0].stdout, Some("output".to_string()));
     }
 
-    #[test]
-    fn test_task_retry() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_task_retry() {
+        let manager = StateManager::in_memory().await.unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
-        let execution_id = manager.start_execution(workflow_id).unwrap();
-        let task_id = manager.start_task(execution_id, "task1", 1).unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).await.unwrap();
+        let execution_id = manager.start_execution(workflow_id).await.unwrap();
+        let task_id = manager.start_task(execution_id, "task1", 1).await.unwrap();
 
         // Set retry
         let next_retry = Utc::now() + chrono::Duration::seconds(10);
-        manager.set_task_retry(task_id, 1, next_retry).unwrap();
+        manager
+            .set_task_retry(task_id, 1, next_retry)
+            .await
+            .unwrap();
 
-        let tasks = manager.get_task_executions(execution_id).unwrap();
+        let tasks = manager.get_task_executions(execution_id).await.unwrap();
         assert_eq!(tasks[0].status, TaskStatus::Retrying);
         assert_eq!(tasks[0].retry_count, 1);
         assert!(tasks[0].next_retry_at.is_some());
     }
 
-    #[test]
-    fn test_crash_recovery() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_crash_recovery() {
+        let manager = StateManager::in_memory().await.unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
-        let exec1 = manager.start_execution(workflow_id).unwrap();
-        let exec2 = manager.start_execution(workflow_id).unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).await.unwrap();
+        let exec1 = manager.start_execution(workflow_id).await.unwrap();
+        let exec2 = manager.start_execution(workflow_id).await.unwrap();
 
         // Complete one execution
         manager
             .update_execution_status(exec1, TaskStatus::Success)
+            .await
             .unwrap();
 
         // Simulate crash (exec2 still running)
-        let crashed = manager.recover_from_crash().unwrap();
+        let crashed = manager.recover_from_crash().await.unwrap();
 
         assert_eq!(crashed.len(), 1);
         assert_eq!(crashed[0], exec2);
 
         // Verify exec2 marked as failed
-        let execution = manager.get_execution(exec2).unwrap().unwrap();
+        let execution = manager.get_execution(exec2).await.unwrap().unwrap();
         assert_eq!(execution.status, TaskStatus::Failed);
     }
 
-    #[test]
-    fn test_execution_history() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_execution_history() {
+        let manager = StateManager::in_memory().await.unwrap();
 
-        let workflow_id = manager.get_or_create_workflow("test", None).unwrap();
+        let workflow_id = manager.get_or_create_workflow("test", None).await.unwrap();
 
         // Create multiple executions
         for _ in 0..5 {
-            let exec_id = manager.start_execution(workflow_id).unwrap();
+            let exec_id = manager.start_execution(workflow_id).await.unwrap();
             manager
                 .update_execution_status(exec_id, TaskStatus::Success)
+                .await
                 .unwrap();
         }
 
-        let history = manager.get_execution_history("test", 3).unwrap();
+        let history = manager.get_execution_history("test", 3).await.unwrap();
         assert_eq!(history.len(), 3);
     }
 
-    #[test]
+    #[tokio::test]
     #[cfg(unix)]
-    fn test_database_file_permissions() {
+    async fn test_database_file_permissions() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
@@ -963,7 +980,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create state manager (should create DB with 0600 permissions)
-        let _manager = StateManager::new(&db_path).unwrap();
+        let _manager = StateManager::new(&db_path).await.unwrap();
 
         // Check file permissions
         let metadata = fs::metadata(&db_path).unwrap();
@@ -981,45 +998,51 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_list_workflows() {
-        let manager = StateManager::in_memory().unwrap();
+    #[tokio::test]
+    async fn test_list_workflows() {
+        let manager = StateManager::in_memory().await.unwrap();
 
         // Create multiple workflows with different execution counts
         let wf1_id = manager
             .get_or_create_workflow("workflow-alpha", None)
+            .await
             .unwrap();
         let wf2_id = manager
             .get_or_create_workflow("workflow-beta", None)
+            .await
             .unwrap();
         let _wf3_id = manager
             .get_or_create_workflow("workflow-gamma", None)
+            .await
             .unwrap();
 
         // workflow-alpha: 3 successful executions
         for _ in 0..3 {
-            let exec_id = manager.start_execution(wf1_id).unwrap();
+            let exec_id = manager.start_execution(wf1_id).await.unwrap();
             manager
                 .update_execution_status(exec_id, TaskStatus::Success)
+                .await
                 .unwrap();
         }
 
         // workflow-beta: 2 successful, 1 failed
         for _ in 0..2 {
-            let exec_id = manager.start_execution(wf2_id).unwrap();
+            let exec_id = manager.start_execution(wf2_id).await.unwrap();
             manager
                 .update_execution_status(exec_id, TaskStatus::Success)
+                .await
                 .unwrap();
         }
-        let exec_id = manager.start_execution(wf2_id).unwrap();
+        let exec_id = manager.start_execution(wf2_id).await.unwrap();
         manager
             .update_execution_status(exec_id, TaskStatus::Failed)
+            .await
             .unwrap();
 
         // workflow-gamma: 0 executions (just created)
 
         // List all workflows
-        let workflows = manager.list_workflows().unwrap();
+        let workflows = manager.list_workflows().await.unwrap();
         assert_eq!(workflows.len(), 3);
 
         // Find each workflow in the list

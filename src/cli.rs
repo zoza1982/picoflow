@@ -167,10 +167,10 @@ impl Cli {
                 self.validate_workflow(workflow)?;
             }
             Commands::Status { workflow, limit } => {
-                self.show_status(workflow.as_deref(), *limit)?;
+                self.show_status(workflow.as_deref(), *limit).await?;
             }
             Commands::Workflow { command } => {
-                self.handle_workflow_command(command)?;
+                self.handle_workflow_command(command).await?;
             }
             Commands::Daemon { command } => {
                 self.handle_daemon_command(command).await?;
@@ -180,17 +180,19 @@ impl Cli {
                 status,
                 limit,
             } => {
-                self.show_history(workflow, status.as_deref(), *limit)?;
+                self.show_history(workflow, status.as_deref(), *limit)
+                    .await?;
             }
             Commands::Stats { workflow } => {
-                self.show_stats(workflow)?;
+                self.show_stats(workflow).await?;
             }
             Commands::Logs {
                 workflow,
                 execution_id,
                 task,
             } => {
-                self.show_logs(workflow, *execution_id, task.as_deref())?;
+                self.show_logs(workflow, *execution_id, task.as_deref())
+                    .await?;
             }
         }
         Ok(())
@@ -210,10 +212,10 @@ impl Cli {
         info!("DAG validation successful");
 
         // Create state manager
-        let state_manager = Arc::new(StateManager::new(&self.db_path)?);
+        let state_manager = Arc::new(StateManager::new(&self.db_path).await?);
 
         // Check for crashed executions
-        let crashed = state_manager.recover_from_crash()?;
+        let crashed = state_manager.recover_from_crash().await?;
         if !crashed.is_empty() {
             info!("Recovered {} crashed executions", crashed.len());
         }
@@ -257,12 +259,12 @@ impl Cli {
     }
 
     /// Show execution status
-    fn show_status(&self, workflow_name: Option<&str>, limit: usize) -> anyhow::Result<()> {
-        let state_manager = StateManager::new(&self.db_path)?;
+    async fn show_status(&self, workflow_name: Option<&str>, limit: usize) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path).await?;
 
         if let Some(name) = workflow_name {
             // Show status for specific workflow
-            let history = state_manager.get_execution_history(name, limit)?;
+            let history = state_manager.get_execution_history(name, limit).await?;
 
             println!("Workflow: {}", name);
             println!("Recent executions (limit {}):", limit);
@@ -287,7 +289,7 @@ impl Cli {
                 }
 
                 // Get task details
-                let tasks = state_manager.get_task_executions(exec.id)?;
+                let tasks = state_manager.get_task_executions(exec.id).await?;
                 println!("  Tasks:");
                 for task in tasks {
                     println!(
@@ -305,17 +307,17 @@ impl Cli {
     }
 
     /// Handle workflow management commands
-    fn handle_workflow_command(&self, command: &WorkflowCommands) -> anyhow::Result<()> {
+    async fn handle_workflow_command(&self, command: &WorkflowCommands) -> anyhow::Result<()> {
         match command {
-            WorkflowCommands::List => self.list_workflows()?,
+            WorkflowCommands::List => self.list_workflows().await?,
         }
         Ok(())
     }
 
     /// List all workflows with execution statistics
-    fn list_workflows(&self) -> anyhow::Result<()> {
-        let state_manager = StateManager::new(&self.db_path)?;
-        let workflows = state_manager.list_workflows()?;
+    async fn list_workflows(&self) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path).await?;
+        let workflows = state_manager.list_workflows().await?;
 
         if workflows.is_empty() {
             println!("No workflows found");
@@ -388,7 +390,7 @@ impl Cli {
                 );
 
                 // Create state manager
-                let state_manager = Arc::new(StateManager::new(&self.db_path)?);
+                let state_manager = Arc::new(StateManager::new(&self.db_path).await?);
 
                 // Create daemon
                 let mut daemon = Daemon::new(state_manager, pid_file.clone()).await?;
@@ -438,16 +440,17 @@ impl Cli {
     }
 
     /// Show execution history with optional status filter
-    fn show_history(
+    async fn show_history(
         &self,
         workflow_name: &str,
         status_filter: Option<&str>,
         limit: usize,
     ) -> anyhow::Result<()> {
-        let state_manager = StateManager::new(&self.db_path)?;
+        let state_manager = StateManager::new(&self.db_path).await?;
 
-        let executions =
-            state_manager.get_execution_history_filtered(workflow_name, status_filter, limit)?;
+        let executions = state_manager
+            .get_execution_history_filtered(workflow_name, status_filter, limit)
+            .await?;
 
         if executions.is_empty() {
             println!(
@@ -497,10 +500,10 @@ impl Cli {
     }
 
     /// Show workflow execution statistics
-    fn show_stats(&self, workflow_name: &str) -> anyhow::Result<()> {
-        let state_manager = StateManager::new(&self.db_path)?;
+    async fn show_stats(&self, workflow_name: &str) -> anyhow::Result<()> {
+        let state_manager = StateManager::new(&self.db_path).await?;
 
-        let stats = state_manager.get_workflow_statistics(workflow_name)?;
+        let stats = state_manager.get_workflow_statistics(workflow_name).await?;
 
         println!("\nStatistics for workflow '{}'", workflow_name);
         println!("{:-<50}", "");
@@ -535,20 +538,22 @@ impl Cli {
     }
 
     /// Show task execution logs
-    fn show_logs(
+    async fn show_logs(
         &self,
         workflow_name: &str,
         execution_id: Option<i64>,
         task_filter: Option<&str>,
     ) -> anyhow::Result<()> {
-        let state_manager = StateManager::new(&self.db_path)?;
+        let state_manager = StateManager::new(&self.db_path).await?;
 
         // Get execution ID if not provided
         let exec_id = if let Some(id) = execution_id {
             id
         } else {
             // Get latest execution
-            let history = state_manager.get_execution_history(workflow_name, 1)?;
+            let history = state_manager
+                .get_execution_history(workflow_name, 1)
+                .await?;
             if history.is_empty() {
                 println!(
                     "No execution history found for workflow '{}'",
@@ -560,7 +565,7 @@ impl Cli {
         };
 
         // Get task executions
-        let tasks = state_manager.get_task_executions(exec_id)?;
+        let tasks = state_manager.get_task_executions(exec_id).await?;
 
         if tasks.is_empty() {
             println!("No task executions found for execution ID {}", exec_id);

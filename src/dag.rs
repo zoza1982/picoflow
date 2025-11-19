@@ -80,7 +80,16 @@ impl DagEngine {
         for task in tasks {
             let task_index = task_indices[&task.name];
             for dep_name in &task.depends_on {
-                let dep_index = task_indices[dep_name];
+                // Validate that the dependency task exists
+                let dep_index = match task_indices.get(dep_name) {
+                    Some(&index) => index,
+                    None => {
+                        return Err(PicoFlowError::MissingDependency {
+                            task: task.name.clone(),
+                            dependency: dep_name.clone(),
+                        });
+                    }
+                };
                 // Edge from dependency to task (dep must complete before task)
                 graph.add_edge(dep_index, task_index, ());
             }
@@ -240,7 +249,8 @@ impl DagEngine {
     /// ```
     pub fn parallel_levels(&self) -> Vec<Vec<String>> {
         let mut levels: Vec<Vec<String>> = Vec::new();
-        let mut node_levels: HashMap<NodeIndex, usize> = HashMap::new();
+        let node_count = self.graph.node_count();
+        let mut node_levels: HashMap<NodeIndex, usize> = HashMap::with_capacity(node_count);
 
         // Calculate level for each node
         for node in self.graph.node_indices() {
@@ -428,6 +438,21 @@ mod tests {
 
         let result = DagEngine::build(&tasks);
         assert!(matches!(result, Err(PicoFlowError::CycleDetected(_))));
+    }
+
+    #[test]
+    fn test_missing_dependency() {
+        let tasks = vec![
+            create_test_task("a", vec![]),
+            create_test_task("b", vec!["nonexistent".to_string()]),
+        ];
+
+        let result = DagEngine::build(&tasks);
+        assert!(matches!(
+            result,
+            Err(PicoFlowError::MissingDependency { task, dependency })
+            if task == "b" && dependency == "nonexistent"
+        ));
     }
 
     #[test]

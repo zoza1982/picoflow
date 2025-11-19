@@ -19,9 +19,9 @@ use tracing::{error, info, warn};
 /// Phase 3: Parallel execution with configurable concurrency limits
 pub struct TaskScheduler {
     state_manager: Arc<StateManager>,
-    shell_executor: ShellExecutor,
-    ssh_executor: SshExecutor,
-    http_executor: HttpExecutor,
+    shell_executor: Arc<ShellExecutor>,
+    ssh_executor: Arc<SshExecutor>,
+    http_executor: Arc<HttpExecutor>,
 }
 
 impl TaskScheduler {
@@ -29,9 +29,9 @@ impl TaskScheduler {
     pub fn new(state_manager: Arc<StateManager>) -> Self {
         Self {
             state_manager,
-            shell_executor: ShellExecutor::new(),
-            ssh_executor: SshExecutor::new(),
-            http_executor: HttpExecutor::new(),
+            shell_executor: Arc::new(ShellExecutor::new()),
+            ssh_executor: Arc::new(SshExecutor::new()),
+            http_executor: Arc::new(HttpExecutor::new()),
         }
     }
 
@@ -61,17 +61,17 @@ impl TaskScheduler {
         // Create workflow execution record
         let workflow_id = self
             .state_manager
-            .get_or_create_workflow(&config.name, config.schedule.as_deref())?;
-        let execution_id = self.state_manager.start_execution(workflow_id)?;
+            .get_or_create_workflow(&config.name, config.schedule.as_deref())
+            .await?;
+        let execution_id = self.state_manager.start_execution(workflow_id).await?;
 
         info!("Created workflow execution record (id: {})", execution_id);
 
-        // Build task lookup map
-        let task_map: HashMap<_, _> = config
-            .tasks
-            .iter()
-            .map(|t| (t.name.clone(), t.clone()))
-            .collect();
+        // Build task lookup map with pre-allocated capacity
+        let mut task_map: HashMap<String, TaskConfig> = HashMap::with_capacity(config.tasks.len());
+        for task in &config.tasks {
+            task_map.insert(task.name.clone(), task.clone());
+        }
 
         // Execute workflow based on max_parallel setting
         let workflow_success = if config.config.max_parallel == 1 {
@@ -106,7 +106,8 @@ impl TaskScheduler {
         };
 
         self.state_manager
-            .update_execution_status(execution_id, final_status.clone())?;
+            .update_execution_status(execution_id, final_status.clone())
+            .await?;
 
         info!("Workflow execution completed with status: {}", final_status);
 
@@ -181,13 +182,13 @@ impl TaskScheduler {
             for task_name in level_tasks {
                 let task = task_map[task_name].clone();
                 let task_name_owned = task_name.clone();
-                let semaphore_clone = semaphore.clone();
+                let semaphore_clone = Arc::clone(&semaphore);
 
-                // Clone necessary data for the spawned task
-                let state_manager = self.state_manager.clone();
-                let shell_executor = self.shell_executor.clone();
-                let ssh_executor = self.ssh_executor.clone();
-                let http_executor = self.http_executor.clone();
+                // Share Arc references for the spawned task (no deep cloning)
+                let state_manager = Arc::clone(&self.state_manager);
+                let shell_executor = Arc::clone(&self.shell_executor);
+                let ssh_executor = Arc::clone(&self.ssh_executor);
+                let http_executor = Arc::clone(&self.http_executor);
 
                 // Spawn task execution
                 let handle = tokio::spawn(async move {
@@ -284,9 +285,10 @@ impl TaskScheduler {
             );
 
             // Start task execution record
-            let task_exec_id =
-                self.state_manager
-                    .start_task(execution_id, &task.name, attempt as i32)?;
+            let task_exec_id = self
+                .state_manager
+                .start_task(execution_id, &task.name, attempt as i32)
+                .await?;
 
             // Execute task
             let result = self.execute_task(task, timeout).await;
@@ -294,13 +296,15 @@ impl TaskScheduler {
             match result {
                 Ok(exec_result) => {
                     // Update task status in database
-                    self.state_manager.update_task_status(
-                        task_exec_id,
-                        exec_result.status.clone(),
-                        exec_result.exit_code,
-                        exec_result.stdout.as_deref(),
-                        exec_result.stderr.as_deref(),
-                    )?;
+                    self.state_manager
+                        .update_task_status(
+                            task_exec_id,
+                            exec_result.status.clone(),
+                            exec_result.exit_code,
+                            exec_result.stdout.as_deref(),
+                            exec_result.stderr.as_deref(),
+                        )
+                        .await?;
 
                     if exec_result.status == TaskStatus::Success {
                         info!("Task '{}' completed successfully", task.name);
@@ -324,11 +328,9 @@ impl TaskScheduler {
                             // Set retry information
                             let next_retry_at =
                                 chrono::Utc::now() + chrono::Duration::from_std(delay).unwrap();
-                            self.state_manager.set_task_retry(
-                                task_exec_id,
-                                attempt as i32,
-                                next_retry_at,
-                            )?;
+                            self.state_manager
+                                .set_task_retry(task_exec_id, attempt as i32, next_retry_at)
+                                .await?;
 
                             tokio::time::sleep(delay).await;
                         } else {
@@ -345,13 +347,15 @@ impl TaskScheduler {
                     error!("Task '{}' execution error: {}", task.name, e);
 
                     // Update task status to failed
-                    self.state_manager.update_task_status(
-                        task_exec_id,
-                        TaskStatus::Failed,
-                        None,
-                        None,
-                        Some(&format!("Execution error: {}", e)),
-                    )?;
+                    self.state_manager
+                        .update_task_status(
+                            task_exec_id,
+                            TaskStatus::Failed,
+                            None,
+                            None,
+                            Some(&format!("Execution error: {}", e)),
+                        )
+                        .await?;
 
                     if attempt <= max_retries {
                         let delay = calculate_backoff_delay(attempt);
@@ -446,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_simple_workflow() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let scheduler = TaskScheduler::new(state_manager.clone());
 
         let config = WorkflowConfig {
@@ -476,6 +480,7 @@ mod tests {
         // Verify execution was recorded
         let history = state_manager
             .get_execution_history("test-workflow", 10)
+            .await
             .unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].status, TaskStatus::Success);
@@ -483,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_failing_workflow() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let scheduler = TaskScheduler::new(state_manager.clone());
 
         let config = WorkflowConfig {
@@ -513,6 +518,7 @@ mod tests {
         // Verify execution was recorded as failed
         let history = state_manager
             .get_execution_history("fail-workflow", 10)
+            .await
             .unwrap();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].status, TaskStatus::Failed);
@@ -520,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_continue_on_failure() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let scheduler = TaskScheduler::new(state_manager.clone());
 
         let config = WorkflowConfig {
@@ -567,11 +573,16 @@ mod tests {
         // Verify both tasks were executed
         let _workflow_id = state_manager
             .get_or_create_workflow("continue-workflow", None)
+            .await
             .unwrap();
         let history = state_manager
             .get_execution_history("continue-workflow", 1)
+            .await
             .unwrap();
-        let tasks = state_manager.get_task_executions(history[0].id).unwrap();
+        let tasks = state_manager
+            .get_task_executions(history[0].id)
+            .await
+            .unwrap();
 
         assert_eq!(tasks.len(), 2); // Both tasks executed
     }

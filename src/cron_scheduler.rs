@@ -13,7 +13,7 @@
 //! use std::sync::Arc;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let state_manager = Arc::new(StateManager::new("picoflow.db")?);
+//! let state_manager = Arc::new(StateManager::new("picoflow.db").await?);
 //! let mut scheduler = CronScheduler::new(state_manager).await?;
 //!
 //! // Parse workflow with cron schedule (6-field format: sec min hour day month dayofweek)
@@ -67,7 +67,7 @@ impl CronScheduler {
     /// use std::sync::Arc;
     ///
     /// # async fn example() -> anyhow::Result<()> {
-    /// let state_manager = Arc::new(StateManager::new("picoflow.db")?);
+    /// let state_manager = Arc::new(StateManager::new("picoflow.db").await?);
     /// let scheduler = CronScheduler::new(state_manager).await?;
     /// # Ok(())
     /// # }
@@ -263,14 +263,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_cron_scheduler_new() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let scheduler = CronScheduler::new(state_manager).await;
         assert!(scheduler.is_ok());
     }
 
     #[tokio::test]
     async fn test_add_workflow_with_schedule() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let mut scheduler = CronScheduler::new(state_manager).await.unwrap();
 
         let workflow = WorkflowConfig {
@@ -300,7 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_workflow_without_schedule() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let mut scheduler = CronScheduler::new(state_manager).await.unwrap();
 
         let workflow = WorkflowConfig {
@@ -318,7 +318,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_workflow_invalid_cron() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let mut scheduler = CronScheduler::new(state_manager).await.unwrap();
 
         let workflow = WorkflowConfig {
@@ -335,7 +335,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_scheduler_start_stop() {
-        let state_manager = Arc::new(StateManager::in_memory().unwrap());
+        let state_manager = Arc::new(StateManager::in_memory().await.unwrap());
         let mut scheduler = CronScheduler::new(state_manager).await.unwrap();
 
         // Start scheduler
