@@ -343,10 +343,12 @@ fn bench_simple_sequential_workflow(c: &mut Criterion) {
     group.bench_function("3_tasks", |b| {
         b.iter_batched(
             || {
+                let setup_rt = Runtime::new().unwrap();
                 let workflow = create_simple_sequential_workflow();
                 let temp_dir = TempDir::new().unwrap();
                 let db_path = temp_dir.path().join("bench.db");
-                let state_manager = Arc::new(StateManager::new(&db_path).unwrap());
+                let state_manager =
+                    Arc::new(setup_rt.block_on(StateManager::new(&db_path)).unwrap());
                 let scheduler = TaskScheduler::new(state_manager);
                 (scheduler, workflow, temp_dir)
             },
@@ -374,10 +376,12 @@ fn bench_complex_dag_workflow(c: &mut Criterion) {
     group.bench_function("10_tasks_parallel", |b| {
         b.iter_batched(
             || {
+                let setup_rt = Runtime::new().unwrap();
                 let workflow = create_complex_dag_workflow();
                 let temp_dir = TempDir::new().unwrap();
                 let db_path = temp_dir.path().join("bench.db");
-                let state_manager = Arc::new(StateManager::new(&db_path).unwrap());
+                let state_manager =
+                    Arc::new(setup_rt.block_on(StateManager::new(&db_path)).unwrap());
                 let scheduler = TaskScheduler::new(state_manager);
                 (scheduler, workflow, temp_dir)
             },
@@ -413,10 +417,12 @@ fn bench_parallel_workflow_execution(c: &mut Criterion) {
             |b, &(tasks, parallel)| {
                 b.iter_batched(
                     || {
+                        let setup_rt = Runtime::new().unwrap();
                         let workflow = create_parallel_workflow(tasks, parallel);
                         let temp_dir = TempDir::new().unwrap();
                         let db_path = temp_dir.path().join("bench.db");
-                        let state_manager = Arc::new(StateManager::new(&db_path).unwrap());
+                        let state_manager =
+                            Arc::new(setup_rt.block_on(StateManager::new(&db_path)).unwrap());
                         let scheduler = TaskScheduler::new(state_manager);
                         (scheduler, workflow, temp_dir)
                     },
@@ -453,10 +459,12 @@ fn bench_large_sequential_workflow(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || {
+                        let setup_rt = Runtime::new().unwrap();
                         let workflow = create_large_sequential_workflow(count);
                         let temp_dir = TempDir::new().unwrap();
                         let db_path = temp_dir.path().join("bench.db");
-                        let state_manager = Arc::new(StateManager::new(&db_path).unwrap());
+                        let state_manager =
+                            Arc::new(setup_rt.block_on(StateManager::new(&db_path)).unwrap());
                         let scheduler = TaskScheduler::new(state_manager);
                         (scheduler, workflow, temp_dir)
                     },
@@ -622,9 +630,11 @@ tasks:
     group.bench_function("single_task_total_overhead", |b| {
         b.iter_batched(
             || {
+                let setup_rt = Runtime::new().unwrap();
                 let temp_dir = TempDir::new().unwrap();
                 let db_path = temp_dir.path().join("bench.db");
-                let state_manager = Arc::new(StateManager::new(&db_path).unwrap());
+                let state_manager =
+                    Arc::new(setup_rt.block_on(StateManager::new(&db_path)).unwrap());
                 let scheduler = TaskScheduler::new(state_manager);
                 (scheduler, temp_dir)
             },

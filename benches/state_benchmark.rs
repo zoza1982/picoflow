@@ -5,11 +5,12 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 /// Helper to create a temporary StateManager for benchmarking
-fn create_temp_state_manager() -> (StateManager, TempDir) {
+fn create_temp_state_manager() -> (StateManager, TempDir, Runtime) {
+    let rt = Runtime::new().unwrap();
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("benchmark.db");
-    let manager = StateManager::new(&db_path).unwrap();
-    (manager, temp_dir)
+    let manager = rt.block_on(StateManager::new(&db_path)).unwrap();
+    (manager, temp_dir, rt)
 }
 
 /// Benchmark workflow creation
@@ -19,12 +20,12 @@ fn bench_workflow_creation(c: &mut Criterion) {
     group.bench_function("create_workflow", |b| {
         b.iter_batched(
             create_temp_state_manager,
-            |(manager, _temp_dir)| {
-                let workflow_id = manager
-                    .get_or_create_workflow(
+            |(manager, _temp_dir, rt)| {
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow(
                         black_box("test_workflow"),
                         black_box(Some("0 2 * * *")),
-                    )
+                    ))
                     .unwrap();
                 assert!(workflow_id > 0);
             },
@@ -35,18 +36,17 @@ fn bench_workflow_creation(c: &mut Criterion) {
     group.bench_function("get_existing_workflow", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                rt.block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                (manager, temp_dir)
+                (manager, temp_dir, rt)
             },
-            |(manager, _temp_dir)| {
-                let workflow_id = manager
-                    .get_or_create_workflow(
+            |(manager, _temp_dir, rt)| {
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow(
                         black_box("test_workflow"),
                         black_box(Some("0 2 * * *")),
-                    )
+                    ))
                     .unwrap();
                 assert!(workflow_id > 0);
             },
@@ -65,14 +65,16 @@ fn bench_execution_management(c: &mut Criterion) {
     group.bench_function("start_execution", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                let workflow_id = manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                (manager, workflow_id, temp_dir)
+                (manager, workflow_id, temp_dir, rt)
             },
-            |(manager, workflow_id, _temp_dir)| {
-                let execution_id = manager.start_execution(black_box(workflow_id)).unwrap();
+            |(manager, workflow_id, _temp_dir, rt)| {
+                let execution_id = rt
+                    .block_on(manager.start_execution(black_box(workflow_id)))
+                    .unwrap();
                 assert!(execution_id > 0);
             },
             criterion::BatchSize::SmallInput,
@@ -83,20 +85,19 @@ fn bench_execution_management(c: &mut Criterion) {
     group.bench_function("update_execution_status", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                let workflow_id = manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                let execution_id = manager.start_execution(workflow_id).unwrap();
-                (manager, execution_id, temp_dir)
+                let execution_id = rt.block_on(manager.start_execution(workflow_id)).unwrap();
+                (manager, execution_id, temp_dir, rt)
             },
-            |(manager, execution_id, _temp_dir)| {
-                manager
-                    .update_execution_status(
-                        black_box(execution_id),
-                        black_box(TaskStatus::Success),
-                    )
-                    .unwrap();
+            |(manager, execution_id, _temp_dir, rt)| {
+                rt.block_on(manager.update_execution_status(
+                    black_box(execution_id),
+                    black_box(TaskStatus::Success),
+                ))
+                .unwrap();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -113,16 +114,20 @@ fn bench_task_execution_records(c: &mut Criterion) {
     group.bench_function("start_task", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                let workflow_id = manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                let execution_id = manager.start_execution(workflow_id).unwrap();
-                (manager, execution_id, temp_dir)
+                let execution_id = rt.block_on(manager.start_execution(workflow_id)).unwrap();
+                (manager, execution_id, temp_dir, rt)
             },
-            |(manager, execution_id, _temp_dir)| {
-                let task_id = manager
-                    .start_task(black_box(execution_id), black_box("test_task"), 1)
+            |(manager, execution_id, _temp_dir, rt)| {
+                let task_id = rt
+                    .block_on(manager.start_task(
+                        black_box(execution_id),
+                        black_box("test_task"),
+                        1,
+                    ))
                     .unwrap();
                 assert!(task_id > 0);
             },
@@ -134,24 +139,25 @@ fn bench_task_execution_records(c: &mut Criterion) {
     group.bench_function("update_task_status", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                let workflow_id = manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                let execution_id = manager.start_execution(workflow_id).unwrap();
-                let task_id = manager.start_task(execution_id, "test_task", 1).unwrap();
-                (manager, task_id, temp_dir)
+                let execution_id = rt.block_on(manager.start_execution(workflow_id)).unwrap();
+                let task_id = rt
+                    .block_on(manager.start_task(execution_id, "test_task", 1))
+                    .unwrap();
+                (manager, task_id, temp_dir, rt)
             },
-            |(manager, task_id, _temp_dir)| {
-                manager
-                    .update_task_status(
-                        black_box(task_id),
-                        black_box(TaskStatus::Success),
-                        black_box(Some(0)),
-                        black_box(Some("output")),
-                        black_box(Some("")),
-                    )
-                    .unwrap();
+            |(manager, task_id, _temp_dir, rt)| {
+                rt.block_on(manager.update_task_status(
+                    black_box(task_id),
+                    black_box(TaskStatus::Success),
+                    black_box(Some(0)),
+                    black_box(Some("output")),
+                    black_box(Some("")),
+                ))
+                .unwrap();
             },
             criterion::BatchSize::SmallInput,
         );
@@ -164,45 +170,42 @@ fn bench_task_execution_records(c: &mut Criterion) {
 
 /// Benchmark execution history queries
 fn bench_execution_history_queries(c: &mut Criterion) {
-    let _rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("execution_history_queries");
 
     // Create a database with multiple executions
-    fn setup_db_with_executions(count: usize) -> (StateManager, TempDir) {
-        let (manager, temp_dir) = create_temp_state_manager();
-        let workflow_id = manager
-            .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+    fn setup_db_with_executions(count: usize) -> (StateManager, TempDir, Runtime) {
+        let (manager, temp_dir, rt) = create_temp_state_manager();
+        let workflow_id = rt
+            .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
             .unwrap();
 
         for i in 0..count {
-            let execution_id = manager.start_execution(workflow_id).unwrap();
+            let execution_id = rt.block_on(manager.start_execution(workflow_id)).unwrap();
             let status = if i % 3 == 0 {
                 TaskStatus::Failed
             } else {
                 TaskStatus::Success
             };
-            manager
-                .update_execution_status(execution_id, status)
+            rt.block_on(manager.update_execution_status(execution_id, status))
                 .unwrap();
 
             // Add some tasks
             for j in 0..5 {
-                let task_id = manager
-                    .start_task(execution_id, &format!("task{}", j), 1)
+                let task_id = rt
+                    .block_on(manager.start_task(execution_id, &format!("task{}", j), 1))
                     .unwrap();
-                manager
-                    .update_task_status(
-                        task_id,
-                        TaskStatus::Success,
-                        Some(0),
-                        Some("output"),
-                        Some(""),
-                    )
-                    .unwrap();
+                rt.block_on(manager.update_task_status(
+                    task_id,
+                    TaskStatus::Success,
+                    Some(0),
+                    Some("output"),
+                    Some(""),
+                ))
+                .unwrap();
             }
         }
 
-        (manager, temp_dir)
+        (manager, temp_dir, rt)
     }
 
     // Benchmark getting execution history
@@ -213,9 +216,14 @@ fn bench_execution_history_queries(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || setup_db_with_executions(count),
-                    |(manager, _temp_dir)| {
-                        let history = manager
-                            .get_execution_history(black_box("test_workflow"), black_box(10))
+                    |(manager, _temp_dir, rt)| {
+                        let history = rt
+                            .block_on(
+                                manager.get_execution_history(
+                                    black_box("test_workflow"),
+                                    black_box(10),
+                                ),
+                            )
                             .unwrap();
                         assert!(!history.is_empty());
                     },
@@ -233,16 +241,19 @@ fn bench_execution_history_queries(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || {
-                        let (manager, temp_dir) = setup_db_with_executions(count);
-                        let workflow_id = manager
-                            .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                        let (manager, temp_dir, rt) = setup_db_with_executions(count);
+                        let workflow_id = rt
+                            .block_on(
+                                manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")),
+                            )
                             .unwrap();
-                        let execution_id = manager.start_execution(workflow_id).unwrap();
-                        (manager, execution_id, temp_dir)
+                        let execution_id =
+                            rt.block_on(manager.start_execution(workflow_id)).unwrap();
+                        (manager, execution_id, temp_dir, rt)
                     },
-                    |(manager, execution_id, _temp_dir)| {
-                        let _tasks = manager
-                            .get_task_executions(black_box(execution_id))
+                    |(manager, execution_id, _temp_dir, rt)| {
+                        let _tasks = rt
+                            .block_on(manager.get_task_executions(black_box(execution_id)))
                             .unwrap();
                         // May be empty if it's a new execution
                     },
@@ -267,29 +278,31 @@ fn bench_workflow_statistics(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || {
-                        let (manager, temp_dir) = create_temp_state_manager();
-                        let workflow_id = manager
-                            .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                        let (manager, temp_dir, rt) = create_temp_state_manager();
+                        let workflow_id = rt
+                            .block_on(
+                                manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")),
+                            )
                             .unwrap();
 
                         // Create executions with mixed success/failure
                         for i in 0..count {
-                            let execution_id = manager.start_execution(workflow_id).unwrap();
+                            let execution_id =
+                                rt.block_on(manager.start_execution(workflow_id)).unwrap();
                             let status = if i % 3 == 0 {
                                 TaskStatus::Failed
                             } else {
                                 TaskStatus::Success
                             };
-                            manager
-                                .update_execution_status(execution_id, status)
+                            rt.block_on(manager.update_execution_status(execution_id, status))
                                 .unwrap();
                         }
 
-                        (manager, temp_dir)
+                        (manager, temp_dir, rt)
                     },
-                    |(manager, _temp_dir)| {
-                        let stats = manager
-                            .get_workflow_statistics(black_box("test_workflow"))
+                    |(manager, _temp_dir, rt)| {
+                        let stats = rt
+                            .block_on(manager.get_workflow_statistics(black_box("test_workflow")))
                             .unwrap();
                         assert!(stats.total_executions > 0);
                     },
@@ -304,7 +317,6 @@ fn bench_workflow_statistics(c: &mut Criterion) {
 
 /// Benchmark concurrent database operations
 fn bench_concurrent_operations(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
     let mut group = c.benchmark_group("concurrent_operations");
 
     // Benchmark concurrent writes (workflow executions)
@@ -315,21 +327,24 @@ fn bench_concurrent_operations(c: &mut Criterion) {
             |b, &count| {
                 b.iter_batched(
                     || {
-                        let (manager, temp_dir) = create_temp_state_manager();
-                        let workflow_id = manager
-                            .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                        let (manager, temp_dir, rt) = create_temp_state_manager();
+                        let workflow_id = rt
+                            .block_on(
+                                manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")),
+                            )
                             .unwrap();
-                        (manager, workflow_id, temp_dir)
+                        (manager, workflow_id, temp_dir, rt)
                     },
-                    |(manager, workflow_id, _temp_dir)| {
+                    |(manager, workflow_id, _temp_dir, rt)| {
                         rt.block_on(async move {
                             let mut handles = vec![];
                             for _ in 0..count {
                                 let mgr = manager.clone();
                                 let wf_id = workflow_id;
                                 handles.push(tokio::spawn(async move {
-                                    let exec_id = mgr.start_execution(wf_id).unwrap();
+                                    let exec_id = mgr.start_execution(wf_id).await.unwrap();
                                     mgr.update_execution_status(exec_id, TaskStatus::Success)
+                                        .await
                                         .unwrap();
                                 }));
                             }
@@ -355,14 +370,16 @@ fn bench_transaction_overhead(c: &mut Criterion) {
     group.bench_function("single_insert", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                let workflow_id = manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                (manager, workflow_id, temp_dir)
+                (manager, workflow_id, temp_dir, rt)
             },
-            |(manager, workflow_id, _temp_dir)| {
-                let execution_id = manager.start_execution(black_box(workflow_id)).unwrap();
+            |(manager, workflow_id, _temp_dir, rt)| {
+                let execution_id = rt
+                    .block_on(manager.start_execution(black_box(workflow_id)))
+                    .unwrap();
                 assert!(execution_id > 0);
             },
             criterion::BatchSize::SmallInput,
@@ -373,15 +390,17 @@ fn bench_transaction_overhead(c: &mut Criterion) {
     group.bench_function("batch_10_inserts", |b| {
         b.iter_batched(
             || {
-                let (manager, temp_dir) = create_temp_state_manager();
-                let workflow_id = manager
-                    .get_or_create_workflow("test_workflow", Some("0 2 * * *"))
+                let (manager, temp_dir, rt) = create_temp_state_manager();
+                let workflow_id = rt
+                    .block_on(manager.get_or_create_workflow("test_workflow", Some("0 2 * * *")))
                     .unwrap();
-                (manager, workflow_id, temp_dir)
+                (manager, workflow_id, temp_dir, rt)
             },
-            |(manager, workflow_id, _temp_dir)| {
+            |(manager, workflow_id, _temp_dir, rt)| {
                 for _ in 0..10 {
-                    let execution_id = manager.start_execution(black_box(workflow_id)).unwrap();
+                    let execution_id = rt
+                        .block_on(manager.start_execution(black_box(workflow_id)))
+                        .unwrap();
                     assert!(execution_id > 0);
                 }
             },
