@@ -9,10 +9,10 @@ This directory contains scripts for building, packaging, and releasing PicoFlow 
 ./scripts/docker-build.sh
 
 # Build release binaries
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 
 # Package for distribution
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 ```
 
 ## Scripts Overview
@@ -67,15 +67,15 @@ Build optimized release binaries with version embedding and metadata.
 ./scripts/build-release.sh
 
 # Override version
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 ```
 
 **Output:**
 ```
 target/release-binaries/
-  ├── picoflow-v1.0.0-arm32
-  ├── picoflow-v1.0.0-arm64
-  ├── picoflow-v1.0.0-x86_64
+  ├── picoflow-v0.1.1-arm32
+  ├── picoflow-v0.1.1-arm64
+  ├── picoflow-v0.1.1-x86_64
   └── manifest.json
 ```
 
@@ -104,7 +104,7 @@ Create distribution packages with installation scripts and documentation.
 **Usage:**
 ```bash
 # Package all binaries
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 
 # Must match version used in build-release.sh
 ```
@@ -112,12 +112,12 @@ Create distribution packages with installation scripts and documentation.
 **Output:**
 ```
 target/packages/
-  ├── picoflow-v1.0.0-arm32-linux.tar.gz
-  ├── picoflow-v1.0.0-arm32-linux.tar.gz.sha256
-  ├── picoflow-v1.0.0-arm64-linux.tar.gz
-  ├── picoflow-v1.0.0-arm64-linux.tar.gz.sha256
-  ├── picoflow-v1.0.0-x86_64-linux.tar.gz
-  ├── picoflow-v1.0.0-x86_64-linux.tar.gz.sha256
+  ├── picoflow-v0.1.1-arm32-linux.tar.gz
+  ├── picoflow-v0.1.1-arm32-linux.tar.gz.sha256
+  ├── picoflow-v0.1.1-arm64-linux.tar.gz
+  ├── picoflow-v0.1.1-arm64-linux.tar.gz.sha256
+  ├── picoflow-v0.1.1-x86_64-linux.tar.gz
+  ├── picoflow-v0.1.1-x86_64-linux.tar.gz.sha256
   └── RELEASE_NOTES.md
 ```
 
@@ -186,7 +186,7 @@ target/release-binaries/
 
 ```bash
 # Set version
-VERSION=v1.0.0
+VERSION=v0.1.1
 
 # Build binaries with version info
 ./scripts/build-release.sh $VERSION
@@ -324,7 +324,7 @@ sudo systemctl start docker  # Linux
 
 **Error:**
 ```
-Binary not found: target/release-binaries/picoflow-v1.0.0-arm32
+Binary not found: target/release-binaries/picoflow-v0.1.1-arm32
 ```
 
 **Solution:**
@@ -340,7 +340,7 @@ Binary not found: target/release-binaries/picoflow-v1.0.0-arm32
 The `.github/workflows/release.yml` workflow automates the entire build and release process:
 
 **Triggers:**
-- Git tags matching `v*.*.*` (e.g., `v1.0.0`)
+- Git tags matching `v*.*.*` (e.g., `v0.1.1`)
 - Manual workflow dispatch
 
 **Jobs:**
@@ -352,7 +352,7 @@ The `.github/workflows/release.yml` workflow automates the entire build and rele
 
 **Manual Trigger:**
 ```bash
-gh workflow run release.yml -f version=v1.0.0
+gh workflow run release.yml -f version=v0.1.1
 ```
 
 ---

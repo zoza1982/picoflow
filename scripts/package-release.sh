@@ -17,7 +17,7 @@
 #
 # Examples:
 #   ./scripts/package-release.sh           # Use version from Cargo.toml
-#   ./scripts/package-release.sh v1.0.0    # Override version
+#   ./scripts/package-release.sh v0.1.1    # Override version
 #
 
 set -euo pipefail

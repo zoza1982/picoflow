@@ -51,10 +51,10 @@ If you have cross-compilation toolchains installed:
 ./scripts/build-all.sh
 
 # Build release binaries with version info
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 
 # Package for distribution
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 ```
 
 ## Prerequisites
@@ -317,24 +317,24 @@ qemu-aarch64-static -L /usr/aarch64-linux-gnu/ \
 
 ```bash
 # Build optimized binaries with version info
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 
 # Binaries will be in: target/release-binaries/
-# - picoflow-v1.0.0-arm32
-# - picoflow-v1.0.0-arm64
-# - picoflow-v1.0.0-x86_64
+# - picoflow-v0.1.1-arm32
+# - picoflow-v0.1.1-arm64
+# - picoflow-v0.1.1-x86_64
 ```
 
 ### Package for Distribution
 
 ```bash
 # Create installation packages
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 
 # Packages will be in: target/packages/
-# - picoflow-v1.0.0-arm32-linux.tar.gz
-# - picoflow-v1.0.0-arm64-linux.tar.gz
-# - picoflow-v1.0.0-x86_64-linux.tar.gz
+# - picoflow-v0.1.1-arm32-linux.tar.gz
+# - picoflow-v0.1.1-arm64-linux.tar.gz
+# - picoflow-v0.1.1-x86_64-linux.tar.gz
 # - *.sha256 (checksums)
 ```
 
@@ -444,11 +444,11 @@ PicoFlow includes a GitHub Actions workflow for automated releases:
 
 ```yaml
 # Trigger on version tags
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.1.1
+git push origin v0.1.1
 
 # Or trigger manually
-gh workflow run release.yml -f version=v1.0.0
+gh workflow run release.yml -f version=v0.1.1
 ```
 
 The workflow:
@@ -462,21 +462,21 @@ The workflow:
 
 ```bash
 # 1. Build release binaries
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 
 # 2. Package for distribution
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 
 # 3. Test on target platforms
 # ... test binaries on actual hardware ...
 
 # 4. Create Git tag
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
 
 # 5. Create GitHub release
-gh release create v1.0.0 \
-    --title "PicoFlow v1.0.0" \
+gh release create v0.1.1 \
+    --title "PicoFlow v0.1.1" \
     --notes-file target/packages/RELEASE_NOTES.md \
     target/packages/*.tar.gz \
     target/packages/*.sha256

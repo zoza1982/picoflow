@@ -370,7 +370,7 @@ cargo audit
   - Prometheus metrics endpoint
   - Execution history queries
   - Enhanced CLI: history, stats, logs
-- [ ] **Phase 4**: Polish & Documentation (v1.0.0) - Planned
+- [ ] **Phase 4**: Polish & Documentation (v0.1.1) - Planned
   - HTTP executor
   - Comprehensive documentation
   - Production-ready release
