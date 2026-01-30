@@ -33,26 +33,49 @@ PicoFlow is a Rust-native workflow orchestrator designed specifically for resour
 
 ### Installation
 
-#### Pre-built Binaries (Recommended)
+#### Homebrew (macOS & Linux — Recommended)
+
+```bash
+brew tap zoza1982/picoflow
+brew install picoflow
+picoflow --version
+```
+
+#### Pre-built Binaries
 
 Download the appropriate binary for your platform:
 
+**macOS (Apple Silicon):**
+```bash
+VERSION=v0.1.0  # Replace with latest version
+curl -LO https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-darwin-arm64.tar.gz
+tar -xzf picoflow-${VERSION}-darwin-arm64.tar.gz
+cd picoflow-${VERSION}-darwin-arm64
+./install.sh
+picoflow --version
+```
+
+**macOS (Intel):**
+```bash
+VERSION=v0.1.0  # Replace with latest version
+curl -LO https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-darwin-x86_64.tar.gz
+tar -xzf picoflow-${VERSION}-darwin-x86_64.tar.gz
+cd picoflow-${VERSION}-darwin-x86_64
+./install.sh
+picoflow --version
+```
+
+> **Note:** macOS may show a Gatekeeper warning for unsigned binaries. Run
+> `xattr -d com.apple.quarantine /usr/local/bin/picoflow` to clear it, or
+> use Homebrew which handles this automatically.
+
 **ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4 in 32-bit mode):**
 ```bash
-# Download latest release
 VERSION=v0.1.0  # Replace with latest version
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz
-
-# Verify checksum (optional but recommended)
-wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz.sha256
-sha256sum -c picoflow-${VERSION}-arm32-linux.tar.gz.sha256
-
-# Extract and install
 tar -xzf picoflow-${VERSION}-arm32-linux.tar.gz
 cd picoflow-${VERSION}-arm32-linux
 sudo ./install.sh
-
-# Verify installation
 picoflow --version
 ```
 
@@ -106,6 +129,8 @@ cargo install --path .
 
 | Platform | Architecture | Binary Name | Tested Devices |
 |----------|-------------|-------------|----------------|
+| macOS | Apple Silicon (ARM64) | `picoflow-*-darwin-arm64` | MacBook Pro/Air M1-M4, Mac Mini, Mac Studio |
+| macOS | Intel (x86_64) | `picoflow-*-darwin-x86_64` | Intel MacBook Pro/Air, iMac |
 | ARM 32-bit | ARMv7 | `picoflow-*-arm32` | Raspberry Pi Zero 2 W, Pi 3/4 (32-bit OS) |
 | ARM 64-bit | AArch64 | `picoflow-*-arm64` | Raspberry Pi 4/5, Orange Pi, Rock Pi |
 | x86_64 | x86-64 | `picoflow-*-x86_64` | Standard Linux servers, VMs |

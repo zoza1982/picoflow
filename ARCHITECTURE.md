@@ -943,6 +943,32 @@ Test on actual target hardware:
 - ARM32 cross-compilation
 - Memory profiling with `valgrind`
 
+## Distribution & Packaging
+
+### Homebrew (Primary — macOS & Linux)
+
+PicoFlow is distributed via a Homebrew tap for macOS and Linux:
+
+```bash
+brew tap zoza1982/picoflow
+brew install picoflow
+```
+
+The tap repository (`zoza1982/homebrew-picoflow`) contains a binary formula that downloads pre-built binaries from GitHub Releases. The formula is automatically updated by the `update-homebrew` job in the release workflow whenever a new version tag is pushed.
+
+**Supported Homebrew platforms:**
+- macOS Apple Silicon (ARM64)
+- macOS Intel (x86_64)
+- Linux x86_64, ARM64, ARM32 (via Linuxbrew)
+
+### Pre-built Binaries
+
+GitHub Releases provide `.tar.gz` archives with install scripts for all platforms (Linux ARM32/ARM64/x86_64, macOS ARM64/x86_64). Each archive includes the binary, an install script, SHA256 checksum, systemd service file (Linux), and example configuration.
+
+### Release Workflow
+
+The CI release pipeline (`.github/workflows/release.yml`) builds binaries for all five targets, packages them, creates a GitHub Release, and updates the Homebrew tap formula with new SHA256 checksums.
+
 ## Future Extensions (v2.0+)
 
 - **Data Passing**: Task output → next task input (temp files, S3)

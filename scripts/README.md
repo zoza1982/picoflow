@@ -344,10 +344,11 @@ The `.github/workflows/release.yml` workflow automates the entire build and rele
 - Manual workflow dispatch
 
 **Jobs:**
-1. **build** - Build for all platforms
-2. **package** - Create distribution packages
+1. **build** - Build for all platforms (Linux ARM32/ARM64/x86_64, macOS ARM64/Intel)
+2. **package** - Create distribution packages (`.tar.gz` with install scripts)
 3. **create-release** - Upload to GitHub Releases
-4. **test-binaries** - Verify with QEMU
+4. **update-homebrew** - Update `zoza1982/homebrew-picoflow` tap formula with new version and SHA256 checksums (requires `HOMEBREW_TAP_TOKEN` secret)
+5. **test-binaries** - Verify binaries on native runners (macOS) and QEMU (ARM)
 
 **Manual Trigger:**
 ```bash

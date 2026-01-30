@@ -38,6 +38,8 @@ PLATFORMS=(
     "arm32:armv7-unknown-linux-gnueabihf"
     "arm64:aarch64-unknown-linux-gnu"
     "x86_64:x86_64-unknown-linux-gnu"
+    "darwin-arm64:aarch64-apple-darwin"
+    "darwin-x86_64:x86_64-apple-darwin"
 )
 
 # Print colored message
@@ -330,8 +332,19 @@ package_platform() {
 
     log_info "Packaging $platform_name..."
 
+    # Determine OS suffix from platform name
+    local os_suffix="linux"
+    if [[ "$platform_name" == darwin-* ]]; then
+        os_suffix=""
+    fi
+
     # Create package directory
-    local package_name="picoflow-$VERSION-$platform_name-linux"
+    local package_name
+    if [[ -n "$os_suffix" ]]; then
+        package_name="picoflow-$VERSION-$platform_name-$os_suffix"
+    else
+        package_name="picoflow-$VERSION-$platform_name"
+    fi
     local package_dir="$PACKAGES_DIR/$package_name"
     mkdir -p "$package_dir"
 
@@ -343,11 +356,11 @@ package_platform() {
     # Create installation script
     create_install_script "$package_dir"
 
-    # Create systemd service
-    create_systemd_service "$package_dir"
-
-    # Create example configuration
-    create_example_config "$package_dir"
+    # Create systemd service and example config (Linux only)
+    if [[ "$platform_name" != darwin-* ]]; then
+        create_systemd_service "$package_dir"
+        create_example_config "$package_dir"
+    fi
 
     # Create package README
     create_package_readme "$package_dir" "$platform_name"
@@ -401,13 +414,27 @@ generate_release_notes() {
 
 ## Installation
 
+### Homebrew (macOS & Linux — Recommended)
+
+\`\`\`bash
+brew tap zoza1982/picoflow
+brew install picoflow
+\`\`\`
+
+### Pre-built Binaries
+
 Download the appropriate package for your platform:
 
 NOTES
 
     for platform_info in "${PLATFORMS[@]}"; do
         local platform_name="${platform_info%%:*}"
-        local package_name="picoflow-$VERSION-$platform_name-linux.tar.gz"
+        local package_name
+        if [[ "$platform_name" == darwin-* ]]; then
+            package_name="picoflow-$VERSION-$platform_name.tar.gz"
+        else
+            package_name="picoflow-$VERSION-$platform_name-linux.tar.gz"
+        fi
 
         if [[ -f "$PACKAGES_DIR/$package_name" ]]; then
             local sha256
@@ -415,6 +442,11 @@ NOTES
                 sha256=$(cat "$PACKAGES_DIR/$package_name.sha256" | awk '{print $1}')
             else
                 sha256="N/A"
+            fi
+
+            local install_prefix=""
+            if [[ "$platform_name" != darwin-* ]]; then
+                install_prefix="sudo "
             fi
 
             cat >> "$notes_file" <<NOTES
@@ -431,7 +463,7 @@ echo "$sha256  $package_name" | sha256sum -c -
 # Extract and install
 tar -xzf $package_name
 cd ${package_name%.tar.gz}
-sudo ./install.sh
+${install_prefix}./install.sh
 \`\`\`
 
 NOTES
@@ -472,7 +504,12 @@ print_summary() {
 
     for platform_info in "${PLATFORMS[@]}"; do
         local platform_name="${platform_info%%:*}"
-        local package_name="picoflow-$VERSION-$platform_name-linux.tar.gz"
+        local package_name
+        if [[ "$platform_name" == darwin-* ]]; then
+            package_name="picoflow-$VERSION-$platform_name.tar.gz"
+        else
+            package_name="picoflow-$VERSION-$platform_name-linux.tar.gz"
+        fi
 
         if [[ -f "$PACKAGES_DIR/$package_name" ]]; then
             local archive_size

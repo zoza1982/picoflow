@@ -17,7 +17,7 @@ env:
 jobs:
   build:
     name: Build ${{ matrix.platform }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -25,12 +25,23 @@ jobs:
           - platform: arm32
             target: armv7-unknown-linux-gnueabihf
             os: linux
+            runner: ubuntu-latest
           - platform: arm64
             target: aarch64-unknown-linux-gnu
             os: linux
+            runner: ubuntu-latest
           - platform: x86_64
             target: x86_64-unknown-linux-gnu
             os: linux
+            runner: ubuntu-latest
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            os: macos
+            runner: macos-latest
+          - platform: darwin-x86_64
+            target: x86_64-apple-darwin
+            os: macos
+            runner: macos-13
 
     steps:
       - name: Checkout code
@@ -54,7 +65,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation tools
+      - name: Install cross-compilation tools (Linux)
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
@@ -94,7 +106,11 @@ jobs:
 
       - name: Verify binary size
         run: |
-          BINARY_SIZE=$(stat -c%s target/${{ matrix.target }}/release/picoflow)
+          if [[ "${{ matrix.os }}" == "macos" ]]; then
+            BINARY_SIZE=$(stat -f%z target/${{ matrix.target }}/release/picoflow)
+          else
+            BINARY_SIZE=$(stat -c%s target/${{ matrix.target }}/release/picoflow)
+          fi
           SIZE_MB=$(echo "scale=2; $BINARY_SIZE / 1024 / 1024" | bc)
           echo "Binary size: ${SIZE_MB}MB"
 
@@ -113,8 +129,13 @@ jobs:
       - name: Generate checksum
         run: |
           cd artifacts
-          sha256sum picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }} > \
-            picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }}.sha256
+          if command -v sha256sum &> /dev/null; then
+            sha256sum picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }} > \
+              picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }}.sha256
+          else
+            shasum -a 256 picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }} > \
+              picoflow-${{ steps.version.outputs.version }}-${{ matrix.platform }}.sha256
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -157,6 +178,7 @@ jobs:
         run: |
           cd release
 
+          # Linux packages
           for platform in arm32 arm64 x86_64; do
             BINARY="picoflow-${{ steps.version.outputs.version }}-${platform}"
             PACKAGE_NAME="picoflow-${{ steps.version.outputs.version }}-${platform}-linux"
@@ -193,6 +215,45 @@ jobs:
             fi
           done
 
+          # macOS packages
+          for platform in darwin-arm64 darwin-x86_64; do
+            BINARY="picoflow-${{ steps.version.outputs.version }}-${platform}"
+            PACKAGE_NAME="picoflow-${{ steps.version.outputs.version }}-${platform}"
+
+            if [ -f "$BINARY" ]; then
+              echo "Creating package for ${platform}..."
+              mkdir -p "$PACKAGE_NAME"
+
+              # Copy binary
+              cp "$BINARY" "$PACKAGE_NAME/picoflow"
+
+              # Create install script
+              cat > "$PACKAGE_NAME/install.sh" <<'INSTALL'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+          echo "Installing picoflow to $INSTALL_DIR..."
+          mkdir -p "$INSTALL_DIR"
+          cp picoflow "$INSTALL_DIR/"
+          chmod +x "$INSTALL_DIR/picoflow"
+          # Remove macOS quarantine attribute if present
+          xattr -d com.apple.quarantine "$INSTALL_DIR/picoflow" 2>/dev/null || true
+          echo "Installation complete! Run 'picoflow --version' to verify."
+          INSTALL
+              chmod +x "$PACKAGE_NAME/install.sh"
+
+              # Copy README
+              cp ../README.md "$PACKAGE_NAME/" || true
+
+              # Create archive
+              tar -czf "${PACKAGE_NAME}.tar.gz" "$PACKAGE_NAME"
+              sha256sum "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
+
+              # Clean up
+              rm -rf "$PACKAGE_NAME"
+            fi
+          done
+
           ls -lh
 
       - name: Generate release notes
@@ -202,9 +263,34 @@ jobs:
 
           ## Installation
 
+          ### Homebrew (macOS & Linux — Recommended)
+
+          \`\`\`bash
+          brew tap zoza1982/picoflow
+          brew install picoflow
+          \`\`\`
+
+          ### Pre-built Binaries
+
           Download the appropriate package for your platform:
 
-          ### ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4)
+          #### macOS (Apple Silicon)
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-darwin-arm64.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-darwin-arm64.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-darwin-arm64
+          ./install.sh
+          \`\`\`
+
+          #### macOS (Intel)
+          \`\`\`bash
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-darwin-x86_64.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-darwin-x86_64.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-darwin-x86_64
+          ./install.sh
+          \`\`\`
+
+          #### ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4)
           \`\`\`bash
           wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-arm32-linux.tar.gz
           tar -xzf picoflow-${{ steps.version.outputs.version }}-arm32-linux.tar.gz
@@ -212,7 +298,7 @@ jobs:
           sudo ./install.sh
           \`\`\`
 
-          ### ARM 64-bit (Raspberry Pi 4/5)
+          #### ARM 64-bit (Raspberry Pi 4/5)
           \`\`\`bash
           wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-arm64-linux.tar.gz
           tar -xzf picoflow-${{ steps.version.outputs.version }}-arm64-linux.tar.gz
@@ -220,7 +306,7 @@ jobs:
           sudo ./install.sh
           \`\`\`
 
-          ### x86_64 Linux
+          #### x86_64 Linux
           \`\`\`bash
           wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
           tar -xzf picoflow-${{ steps.version.outputs.version }}-x86_64-linux.tar.gz
@@ -295,16 +381,128 @@ jobs:
             release/picoflow-*-arm32
             release/picoflow-*-arm64
             release/picoflow-*-x86_64
+            release/picoflow-*-darwin-arm64
+            release/picoflow-*-darwin-x86_64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Get version
+        id: version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          # Strip leading 'v' for formula version
+          FORMULA_VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "formula_version=${FORMULA_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Download release checksums
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
+
+          # Download checksum files for all platforms
+          for platform in darwin-arm64 darwin-x86_64 arm64-linux x86_64-linux arm32-linux; do
+            ARCHIVE="picoflow-${VERSION}-${platform}.tar.gz"
+            curl -sL "${BASE_URL}/${ARCHIVE}.sha256" -o "${platform}.sha256" || true
+          done
+
+          # Extract SHA256 hashes
+          for platform in darwin-arm64 darwin-x86_64 arm64-linux x86_64-linux arm32-linux; do
+            if [ -f "${platform}.sha256" ]; then
+              SHA=$(awk '{print $1}' "${platform}.sha256")
+              ENVNAME=$(echo "$platform" | tr '-' '_' | tr '[:lower:]' '[:upper:]')
+              echo "SHA_${ENVNAME}=${SHA}" >> $GITHUB_ENV
+              echo "SHA for ${platform}: ${SHA}"
+            fi
+          done
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: zoza1982/homebrew-picoflow
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update formula
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          FORMULA_VERSION="${{ steps.version.outputs.formula_version }}"
+          REPO="${{ github.repository }}"
+
+          cat > homebrew-tap/Formula/picoflow.rb <<FORMULA
+          class Picoflow < Formula
+            desc "Lightweight DAG workflow orchestrator for edge devices"
+            homepage "https://github.com/${REPO}"
+            version "${FORMULA_VERSION}"
+            license "MIT"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-darwin-arm64.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64}"
+              else
+                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-darwin-x86_64.tar.gz"
+                sha256 "${SHA_DARWIN_X86_64}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                if Hardware::CPU.is_64_bit?
+                  url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-arm64-linux.tar.gz"
+                  sha256 "${SHA_ARM64_LINUX}"
+                else
+                  url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz"
+                  sha256 "${SHA_ARM32_LINUX}"
+                end
+              else
+                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-x86_64-linux.tar.gz"
+                sha256 "${SHA_X86_64_LINUX}"
+              end
+            end
+
+            def install
+              bin.install "picoflow"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/picoflow --version")
+            end
+          end
+          FORMULA
+
+      - name: Commit and push formula
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/picoflow.rb
+          git commit -m "Update picoflow to ${{ steps.version.outputs.version }}" || echo "No changes to commit"
+          git push
 
   test-binaries:
     name: Test Binaries
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        platform: [arm32, arm64, x86_64]
+        include:
+          - platform: arm32
+            runner: ubuntu-latest
+          - platform: arm64
+            runner: ubuntu-latest
+          - platform: x86_64
+            runner: ubuntu-latest
+          - platform: darwin-arm64
+            runner: macos-latest
+          - platform: darwin-x86_64
+            runner: macos-13
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
@@ -312,8 +510,8 @@ jobs:
           name: picoflow-${{ matrix.platform }}
           path: artifacts
 
-      - name: Install QEMU (for ARM testing)
-        if: matrix.platform != 'x86_64'
+      - name: Install QEMU (for ARM testing on Linux)
+        if: matrix.platform == 'arm32' || matrix.platform == 'arm64'
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-user-static
@@ -324,16 +522,21 @@ jobs:
           BINARY=$(ls picoflow-* | grep -v '.sha256')
           chmod +x "$BINARY"
 
-          # Try to get version info
           if [[ "${{ matrix.platform }}" == "x86_64" ]]; then
             ./"$BINARY" --version || echo "::warning::Could not run --version on x86_64 binary"
           elif [[ "${{ matrix.platform }}" == "arm32" ]]; then
             qemu-arm-static -L /usr/arm-linux-gnueabihf/ "$BINARY" --version || echo "::warning::Could not run --version on ARM32 binary"
           elif [[ "${{ matrix.platform }}" == "arm64" ]]; then
             qemu-aarch64-static -L /usr/aarch64-linux-gnu/ "$BINARY" --version || echo "::warning::Could not run --version on ARM64 binary"
+          elif [[ "${{ matrix.platform }}" == "darwin-arm64" || "${{ matrix.platform }}" == "darwin-x86_64" ]]; then
+            ./"$BINARY" --version || echo "::warning::Could not run --version on macOS binary"
           fi
 
       - name: Verify checksum
         run: |
           cd artifacts
-          sha256sum -c *.sha256
+          if command -v sha256sum &> /dev/null; then
+            sha256sum -c *.sha256
+          else
+            shasum -a 256 -c *.sha256
+          fi

@@ -4,7 +4,8 @@
 
 **Product Name:** PicoFlow
 **Description:** Lightweight DAG workflow orchestrator in Rust for edge devices
-**Target Platform:** Raspberry Pi Zero 2 W (512MB RAM baseline), ARM/x86_64 Linux, macOS (dev)
+**Target Platform:** Raspberry Pi Zero 2 W (512MB RAM baseline), ARM/x86_64 Linux, macOS (dev + native builds)
+**Distribution:** Homebrew tap (`zoza1982/picoflow`) is the primary install method for macOS and Linux
 **Language:** Rust
 **Target Release:** v0.1.0 (MVP) - Q1 2026
 
