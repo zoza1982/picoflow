@@ -254,7 +254,19 @@ jobs:
             fi
           done
 
-          ls -lh
+          # Move raw binaries and their checksums to a separate directory
+          # to avoid glob collisions with tar.gz packages during upload
+          mkdir -p binaries
+          for platform in arm32 arm64 x86_64 darwin-arm64 darwin-x86_64; do
+            BINARY="picoflow-${{ steps.version.outputs.version }}-${platform}"
+            [ -f "$BINARY" ] && mv "$BINARY" binaries/
+            [ -f "${BINARY}.sha256" ] && mv "${BINARY}.sha256" binaries/
+          done
+
+          echo "=== Packages ==="
+          ls -lh *.tar.gz *.tar.gz.sha256 2>/dev/null || true
+          echo "=== Binaries ==="
+          ls -lh binaries/ 2>/dev/null || true
 
       - name: Generate release notes
         run: |
@@ -378,6 +390,7 @@ jobs:
           files: |
             release/*.tar.gz
             release/*.tar.gz.sha256
+            release/binaries/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
