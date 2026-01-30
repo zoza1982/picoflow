@@ -1,6 +1,6 @@
 [package]
 name = "picoflow"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Zoran Vukmirica <zoza1982@users.noreply.github.com>"]
 description = "Lightweight DAG workflow orchestrator for edge devices"
