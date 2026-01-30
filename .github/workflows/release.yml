@@ -218,7 +218,7 @@ jobs:
           # macOS packages
           for platform in darwin-arm64 darwin-x86_64; do
             BINARY="picoflow-${{ steps.version.outputs.version }}-${platform}"
-            PACKAGE_NAME="picoflow-${{ steps.version.outputs.version }}-${platform}"
+            PACKAGE_NAME="picoflow-${{ steps.version.outputs.version }}-${platform}-macos"
 
             if [ -f "$BINARY" ]; then
               echo "Creating package for ${platform}..."
@@ -276,17 +276,17 @@ jobs:
 
           #### macOS (Apple Silicon)
           \`\`\`bash
-          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-darwin-arm64.tar.gz
-          tar -xzf picoflow-${{ steps.version.outputs.version }}-darwin-arm64.tar.gz
-          cd picoflow-${{ steps.version.outputs.version }}-darwin-arm64
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-darwin-arm64-macos.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-darwin-arm64-macos.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-darwin-arm64-macos
           ./install.sh
           \`\`\`
 
           #### macOS (Intel)
           \`\`\`bash
-          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-darwin-x86_64.tar.gz
-          tar -xzf picoflow-${{ steps.version.outputs.version }}-darwin-x86_64.tar.gz
-          cd picoflow-${{ steps.version.outputs.version }}-darwin-x86_64
+          wget https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.version }}/picoflow-${{ steps.version.outputs.version }}-darwin-x86_64-macos.tar.gz
+          tar -xzf picoflow-${{ steps.version.outputs.version }}-darwin-x86_64-macos.tar.gz
+          cd picoflow-${{ steps.version.outputs.version }}-darwin-x86_64-macos
           ./install.sh
           \`\`\`
 
@@ -407,13 +407,13 @@ jobs:
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
 
           # Download checksum files for all platforms
-          for platform in darwin-arm64 darwin-x86_64 arm64-linux x86_64-linux arm32-linux; do
+          for platform in darwin-arm64-macos darwin-x86_64-macos arm64-linux x86_64-linux arm32-linux; do
             ARCHIVE="picoflow-${VERSION}-${platform}.tar.gz"
             curl -sL "${BASE_URL}/${ARCHIVE}.sha256" -o "${platform}.sha256" || true
           done
 
           # Extract SHA256 hashes
-          for platform in darwin-arm64 darwin-x86_64 arm64-linux x86_64-linux arm32-linux; do
+          for platform in darwin-arm64-macos darwin-x86_64-macos arm64-linux x86_64-linux arm32-linux; do
             if [ -f "${platform}.sha256" ]; then
               SHA=$(awk '{print $1}' "${platform}.sha256")
               ENVNAME=$(echo "$platform" | tr '-' '_' | tr '[:lower:]' '[:upper:]')
@@ -444,11 +444,11 @@ jobs:
 
             on_macos do
               if Hardware::CPU.arm?
-                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-darwin-arm64.tar.gz"
-                sha256 "${SHA_DARWIN_ARM64}"
+                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-darwin-arm64-macos.tar.gz"
+                sha256 "${SHA_DARWIN_ARM64_MACOS}"
               else
-                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-darwin-x86_64.tar.gz"
-                sha256 "${SHA_DARWIN_X86_64}"
+                url "https://github.com/${REPO}/releases/download/${VERSION}/picoflow-${VERSION}-darwin-x86_64-macos.tar.gz"
+                sha256 "${SHA_DARWIN_X86_64_MACOS}"
               end
             end
 
