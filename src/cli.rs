@@ -50,7 +50,6 @@ pub enum Commands {
     /// Show workflow execution status
     Status {
         /// Workflow name (optional, shows all if not specified)
-        #[arg(short, long)]
         workflow: Option<String>,
 
         /// Number of recent executions to show
@@ -73,7 +72,6 @@ pub enum Commands {
     /// Show workflow execution history
     History {
         /// Workflow name
-        #[arg(short, long)]
         workflow: String,
 
         /// Filter by status (success, failed, timeout)
@@ -88,14 +86,12 @@ pub enum Commands {
     /// Show workflow execution statistics
     Stats {
         /// Workflow name
-        #[arg(short, long)]
         workflow: String,
     },
 
     /// Show task execution logs
     Logs {
         /// Workflow name
-        #[arg(short, long)]
         workflow: String,
 
         /// Execution ID (optional, shows latest if not specified)
@@ -391,7 +387,7 @@ impl Cli {
                 println!();
             }
         } else {
-            println!("Use --workflow <name> to see execution history for a specific workflow");
+            println!("Use: picoflow status <name> to see execution history for a specific workflow");
         }
 
         Ok(())
@@ -761,6 +757,14 @@ mod tests {
     fn test_cli_status_command() {
         let cli = Cli::parse_from(["picoflow", "status"]);
         assert!(matches!(cli.command, Commands::Status { .. }));
+
+        // Positional workflow argument
+        let cli = Cli::parse_from(["picoflow", "status", "my-workflow"]);
+        if let Commands::Status { workflow, .. } = &cli.command {
+            assert_eq!(workflow.as_deref(), Some("my-workflow"));
+        } else {
+            panic!("Expected Status command");
+        }
     }
 
     #[test]
