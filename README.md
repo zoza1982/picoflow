@@ -40,7 +40,7 @@ Download the appropriate binary for your platform:
 **ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4 in 32-bit mode):**
 ```bash
 # Download latest release
-VERSION=v1.0.0  # Replace with latest version
+VERSION=v0.1.0  # Replace with latest version
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz
 
 # Verify checksum (optional but recommended)
@@ -58,7 +58,7 @@ picoflow --version
 
 **ARM 64-bit (Raspberry Pi 4/5, modern SBCs):**
 ```bash
-VERSION=v1.0.0  # Replace with latest version
+VERSION=v0.1.0  # Replace with latest version
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm64-linux.tar.gz
 tar -xzf picoflow-${VERSION}-arm64-linux.tar.gz
 cd picoflow-${VERSION}-arm64-linux
@@ -68,7 +68,7 @@ picoflow --version
 
 **x86_64 Linux (Standard Linux servers):**
 ```bash
-VERSION=v1.0.0  # Replace with latest version
+VERSION=v0.1.0  # Replace with latest version
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-x86_64-linux.tar.gz
 tar -xzf picoflow-${VERSION}-x86_64-linux.tar.gz
 cd picoflow-${VERSION}-x86_64-linux
@@ -209,7 +209,7 @@ Comprehensive documentation is available:
 
 ## Performance
 
-### Benchmark Results (v1.0)
+### Benchmark Results (v0.1.0)
 
 **Binary & Memory:**
 - **Binary size**: 6.0MB (stripped, with vendored OpenSSL) - 40% under 10MB target ✅
@@ -322,30 +322,35 @@ cargo audit
 
 ## Roadmap
 
-- [x] **Phase 0**: Foundation (v0.1.0) - ✅ Complete
-- [x] **Phase 1**: MVP Core Engine (v0.2.0) - ✅ Complete
+**Current Release: v0.1.0 (Phase 1 - MVP)**
+
+- [x] **Phase 0**: Foundation - ✅ Complete
+  - Project setup and core architecture
+  - CI/CD pipeline
+  - Basic data models
+- [x] **Phase 1**: MVP Core Engine (v0.1.0) - ✅ Complete
   - Sequential workflow execution
   - DAG engine with cycle detection
   - Shell executor
   - SQLite state management
   - CLI: run, validate, status
-- [x] **Phase 2**: Scheduling & SSH (v0.3.0) - ✅ Complete
+- [ ] **Phase 2**: Scheduling & SSH (v0.2.0) - Planned
   - Cron-based scheduling (6-field format)
   - SSH remote execution (key-based auth)
   - Daemon mode with signal handling
   - Retry logic with exponential backoff
   - Graceful shutdown
-- [x] **Phase 3**: Parallelism & Observability (v0.4.0) - ✅ Complete
+- [ ] **Phase 3**: Parallelism & Observability (v0.3.0) - Planned
   - Parallel task execution
   - Prometheus metrics endpoint
   - Execution history queries
   - Enhanced CLI: history, stats, logs
-- [x] **Phase 4**: Polish & Documentation (v1.0.0) - ✅ Complete
+- [ ] **Phase 4**: Polish & Documentation (v1.0.0) - Planned
   - HTTP executor
   - Comprehensive documentation
   - Production-ready release
 
-**What's Next:**
+**Future Versions:**
 - **v1.1** (Q2 2026): Docker executor, Web UI, REST API
 - **v1.2** (Q3 2026): Conditional execution, loops, templating
 - **v2.0** (Q4 2026): Distributed multi-node execution
