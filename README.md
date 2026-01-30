@@ -43,26 +43,26 @@ picoflow --version
 
 #### Pre-built Binaries
 
-Download the appropriate binary for your platform:
+Download the appropriate binary for your platform. The install script auto-detects the latest release:
 
 **macOS (Apple Silicon):**
 ```bash
-VERSION=v0.1.0  # Replace with latest version
-curl -LO https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-darwin-arm64.tar.gz
-tar -xzf picoflow-${VERSION}-darwin-arm64.tar.gz
-cd picoflow-${VERSION}-darwin-arm64
+curl -sL https://api.github.com/repos/zoza1982/picoflow/releases/latest \
+  | grep "browser_download_url.*darwin-arm64-macos.tar.gz\"" \
+  | cut -d '"' -f 4 | xargs curl -LO
+tar -xzf picoflow-*-darwin-arm64-macos.tar.gz
+cd picoflow-*-darwin-arm64-macos
 ./install.sh
-picoflow --version
 ```
 
 **macOS (Intel):**
 ```bash
-VERSION=v0.1.0  # Replace with latest version
-curl -LO https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-darwin-x86_64.tar.gz
-tar -xzf picoflow-${VERSION}-darwin-x86_64.tar.gz
-cd picoflow-${VERSION}-darwin-x86_64
+curl -sL https://api.github.com/repos/zoza1982/picoflow/releases/latest \
+  | grep "browser_download_url.*darwin-x86_64-macos.tar.gz\"" \
+  | cut -d '"' -f 4 | xargs curl -LO
+tar -xzf picoflow-*-darwin-x86_64-macos.tar.gz
+cd picoflow-*-darwin-x86_64-macos
 ./install.sh
-picoflow --version
 ```
 
 > **Note:** macOS may show a Gatekeeper warning for unsigned binaries. Run
@@ -71,32 +71,32 @@ picoflow --version
 
 **ARM 32-bit (Raspberry Pi Zero 2 W, Pi 3/4 in 32-bit mode):**
 ```bash
-VERSION=v0.1.0  # Replace with latest version
-wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz
-tar -xzf picoflow-${VERSION}-arm32-linux.tar.gz
-cd picoflow-${VERSION}-arm32-linux
+curl -sL https://api.github.com/repos/zoza1982/picoflow/releases/latest \
+  | grep "browser_download_url.*arm32-linux.tar.gz\"" \
+  | cut -d '"' -f 4 | xargs wget -q
+tar -xzf picoflow-*-arm32-linux.tar.gz
+cd picoflow-*-arm32-linux
 sudo ./install.sh
-picoflow --version
 ```
 
 **ARM 64-bit (Raspberry Pi 4/5, modern SBCs):**
 ```bash
-VERSION=v0.1.0  # Replace with latest version
-wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm64-linux.tar.gz
-tar -xzf picoflow-${VERSION}-arm64-linux.tar.gz
-cd picoflow-${VERSION}-arm64-linux
+curl -sL https://api.github.com/repos/zoza1982/picoflow/releases/latest \
+  | grep "browser_download_url.*arm64-linux.tar.gz\"" \
+  | cut -d '"' -f 4 | xargs wget -q
+tar -xzf picoflow-*-arm64-linux.tar.gz
+cd picoflow-*-arm64-linux
 sudo ./install.sh
-picoflow --version
 ```
 
 **x86_64 Linux (Standard Linux servers):**
 ```bash
-VERSION=v0.1.0  # Replace with latest version
-wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-x86_64-linux.tar.gz
-tar -xzf picoflow-${VERSION}-x86_64-linux.tar.gz
-cd picoflow-${VERSION}-x86_64-linux
+curl -sL https://api.github.com/repos/zoza1982/picoflow/releases/latest \
+  | grep "browser_download_url.*x86_64-linux.tar.gz\"" \
+  | cut -d '"' -f 4 | xargs wget -q
+tar -xzf picoflow-*-x86_64-linux.tar.gz
+cd picoflow-*-x86_64-linux
 sudo ./install.sh
-picoflow --version
 ```
 
 #### User Directory Installation (No Root Required)
