@@ -387,7 +387,9 @@ impl Cli {
                 println!();
             }
         } else {
-            println!("Use: picoflow status <name> to see execution history for a specific workflow");
+            println!(
+                "Use: picoflow status <name> to see execution history for a specific workflow"
+            );
         }
 
         Ok(())
