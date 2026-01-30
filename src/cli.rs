@@ -5,7 +5,8 @@ use crate::logging::{init_logging, LogConfig, LogFormat, LogLevel};
 use crate::parser::parse_workflow_file;
 use crate::scheduler::TaskScheduler;
 use crate::state::StateManager;
-use clap::{Parser, Subcommand};
+use crate::templates;
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -105,6 +106,32 @@ pub enum Commands {
         #[arg(short, long)]
         task: Option<String>,
     },
+
+    /// Generate example workflow YAML templates
+    Template {
+        /// Template type (omit to list available templates)
+        #[arg(short = 't', long = "type")]
+        template_type: Option<TemplateType>,
+
+        /// Write output to a file instead of stdout
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+}
+
+/// Available template types for the `template` subcommand.
+#[derive(Debug, Clone, ValueEnum)]
+pub enum TemplateType {
+    /// Single shell task, no dependencies
+    Minimal,
+    /// Multiple shell tasks with dependencies, retry, timeout
+    Shell,
+    /// SSH remote execution with key auth
+    Ssh,
+    /// HTTP API calls (GET/POST) with headers
+    Http,
+    /// All executor types combined with DAG dependencies
+    Full,
 }
 
 #[derive(Subcommand, Debug)]
@@ -194,6 +221,12 @@ impl Cli {
                 self.show_logs(workflow, *execution_id, task.as_deref())
                     .await?;
             }
+            Commands::Template {
+                template_type,
+                output,
+            } => {
+                self.handle_template(template_type.as_ref(), output.as_ref())?;
+            }
         }
         Ok(())
     }
@@ -254,6 +287,64 @@ impl Cli {
         println!("Workflow '{}' is valid", config.name);
         println!("Tasks: {}", config.tasks.len());
         println!("Execution order: {}", execution_order.join(" -> "));
+
+        Ok(())
+    }
+
+    /// Handle the `template` subcommand.
+    fn handle_template(
+        &self,
+        template_type: Option<&TemplateType>,
+        output: Option<&PathBuf>,
+    ) -> anyhow::Result<()> {
+        let Some(tt) = template_type else {
+            // No type specified — list available templates.
+            println!("Available templates:\n");
+            let header_type = "TYPE";
+            let header_desc = "DESCRIPTION";
+            println!("{header_type:<12} {header_desc}");
+            println!("{}", "-".repeat(60));
+            for info in templates::list_templates() {
+                println!("{:<12} {}", info.name, info.description);
+            }
+            println!();
+            println!("Usage: picoflow template --type <TYPE> [-o <FILE>]");
+            return Ok(());
+        };
+
+        let type_name = match tt {
+            TemplateType::Minimal => "minimal",
+            TemplateType::Shell => "shell",
+            TemplateType::Ssh => "ssh",
+            TemplateType::Http => "http",
+            TemplateType::Full => "full",
+        };
+
+        let content = templates::get_template(type_name)
+            .ok_or_else(|| anyhow::anyhow!("Unknown template type: {}", type_name))?;
+
+        if let Some(path) = output {
+            use std::fs::OpenOptions;
+            use std::io::Write as _;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+                .map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::AlreadyExists {
+                        anyhow::anyhow!(
+                            "File '{}' already exists. Remove it first or choose a different name.",
+                            path.display()
+                        )
+                    } else {
+                        e.into()
+                    }
+                })?;
+            file.write_all(content.as_bytes())?;
+            println!("Template written to {}", path.display());
+        } else {
+            print!("{content}");
+        }
 
         Ok(())
     }
@@ -688,6 +779,48 @@ mod tests {
             "test.yaml",
         ]);
         assert_eq!(cli.db_path, PathBuf::from("/tmp/test.db"));
+    }
+
+    #[test]
+    fn test_cli_template_list() {
+        let cli = Cli::parse_from(["picoflow", "template"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Template {
+                template_type: None,
+                output: None,
+            }
+        ));
+    }
+
+    #[test]
+    fn test_cli_template_with_type() {
+        let cli = Cli::parse_from(["picoflow", "template", "--type", "shell"]);
+        if let Commands::Template {
+            template_type,
+            output,
+        } = &cli.command
+        {
+            assert!(template_type.is_some());
+            assert!(output.is_none());
+        } else {
+            panic!("Expected Template command");
+        }
+    }
+
+    #[test]
+    fn test_cli_template_with_output() {
+        let cli = Cli::parse_from(["picoflow", "template", "--type", "full", "-o", "out.yaml"]);
+        if let Commands::Template {
+            template_type,
+            output,
+        } = &cli.command
+        {
+            assert!(template_type.is_some());
+            assert_eq!(output.as_ref().unwrap(), &PathBuf::from("out.yaml"));
+        } else {
+            panic!("Expected Template command");
+        }
     }
 
     #[test]
