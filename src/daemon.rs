@@ -156,13 +156,12 @@ impl Daemon {
             })?;
 
         use std::io::Write;
-        file.write_all(pid.to_string().as_bytes())
-            .map_err(|e| {
-                PicoFlowError::Io(std::io::Error::other(format!(
-                    "Failed to write PID to file: {}",
-                    e
-                )))
-            })?;
+        file.write_all(pid.to_string().as_bytes()).map_err(|e| {
+            PicoFlowError::Io(std::io::Error::other(format!(
+                "Failed to write PID to file: {}",
+                e
+            )))
+        })?;
 
         Ok(())
     }

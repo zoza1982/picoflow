@@ -62,8 +62,10 @@ impl ShellExecutor {
         match output_result {
             Ok(Ok(output)) => {
                 // Truncate output if needed
-                let (stdout, stdout_truncated) = crate::executors::truncate_output_bytes(&output.stdout);
-                let (stderr, stderr_truncated) = crate::executors::truncate_output_bytes(&output.stderr);
+                let (stdout, stdout_truncated) =
+                    crate::executors::truncate_output_bytes(&output.stdout);
+                let (stderr, stderr_truncated) =
+                    crate::executors::truncate_output_bytes(&output.stderr);
                 let output_truncated = stdout_truncated || stderr_truncated;
 
                 let status = if output.status.success() {

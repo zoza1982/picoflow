@@ -353,8 +353,9 @@ impl TaskScheduler {
                             );
 
                             // Set retry information
-                            let next_retry_at =
-                                chrono::Utc::now() + chrono::Duration::from_std(delay).unwrap_or_else(|_| chrono::Duration::seconds(60));
+                            let next_retry_at = chrono::Utc::now()
+                                + chrono::Duration::from_std(delay)
+                                    .unwrap_or_else(|_| chrono::Duration::seconds(60));
                             self.state_manager
                                 .set_task_retry(task_exec_id, (attempt - 1) as i32, next_retry_at)
                                 .await?;
