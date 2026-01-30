@@ -377,12 +377,7 @@ jobs:
           prerelease: false
           files: |
             release/*.tar.gz
-            release/*.sha256
-            release/picoflow-*-arm32
-            release/picoflow-*-arm64
-            release/picoflow-*-x86_64
-            release/picoflow-*-darwin-arm64
-            release/picoflow-*-darwin-x86_64
+            release/*.tar.gz.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
