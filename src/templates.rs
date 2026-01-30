@@ -105,7 +105,13 @@ tasks:
 /// SSH remote execution with key-based authentication.
 const TEMPLATE_SSH: &str = r#"# PicoFlow Workflow — SSH Tasks
 # Demonstrates SSH remote execution with key-based auth.
-# NOTE: Update host, user, and key_file to match your environment.
+# NOTE: Update host, user, and key_path to match your environment.
+#
+# Host key verification:
+#   By default, picoflow verifies the remote host key against ~/.ssh/known_hosts.
+#   If the host is not in known_hosts, the task will fail. To fix:
+#     ssh-keyscan -p 22 <host> >> ~/.ssh/known_hosts
+#   Or set verify_host_key: false per task (not recommended for production).
 name: ssh-workflow
 description: "SSH remote execution with key auth"
 
@@ -118,6 +124,7 @@ tasks:
       user: "deploy"
       key_path: "~/.ssh/id_ed25519"
       command: "uptime"
+      # verify_host_key: true  # default; set to false to skip host key check
     timeout: 30
     retry: 2
 
@@ -130,6 +137,7 @@ tasks:
       user: "deploy"
       key_path: "~/.ssh/id_ed25519"
       command: "tar czf /tmp/backup-$(date +%Y%m%d).tar.gz /var/data"
+      # verify_host_key: true  # default; set to false to skip host key check
     timeout: 600
     retry: 1
 "#;
@@ -179,6 +187,7 @@ tasks:
 const TEMPLATE_FULL: &str = r#"# PicoFlow Workflow — Full Example
 # Combines shell, SSH, and HTTP executors with DAG dependencies.
 # NOTE: Update SSH hosts, HTTP URLs, and credentials for your environment.
+# SSH host key verification is enabled by default (see ssh template for details).
 name: full-workflow
 description: "All executor types combined with DAG dependencies"
 schedule: "0 2 * * *"  # Run daily at 2 AM (optional)
