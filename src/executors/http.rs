@@ -180,7 +180,9 @@ impl HttpExecutor {
             )));
         }
 
-        if ip.is_unicast_link_local() {
+        // Check for link-local addresses (fe80::/10)
+        // Note: is_unicast_link_local() is unstable, so check manually
+        if (ip.segments()[0] & 0xffc0) == 0xfe80 {
             return Err(PicoFlowError::Http(format!(
                 "SSRF protection: Requests to link-local addresses are blocked ({})",
                 ip
