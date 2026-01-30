@@ -41,7 +41,7 @@ jobs:
           - platform: darwin-x86_64
             target: x86_64-apple-darwin
             os: macos
-            runner: macos-13
+            runner: macos-15-intel
 
     steps:
       - name: Checkout code
@@ -502,7 +502,7 @@ jobs:
           - platform: darwin-arm64
             runner: macos-latest
           - platform: darwin-x86_64
-            runner: macos-13
+            runner: macos-15-intel
     steps:
       - name: Download artifact
         uses: actions/download-artifact@v4
