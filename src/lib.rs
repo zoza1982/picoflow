@@ -13,3 +13,4 @@ pub mod parser;
 pub mod retry;
 pub mod scheduler;
 pub mod state;
+pub mod templates;
