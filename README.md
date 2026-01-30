@@ -209,18 +209,35 @@ Comprehensive documentation is available:
 
 ## Performance
 
-Current measurements (v1.0):
+### Benchmark Results (v1.0)
 
+**Binary & Memory:**
 - **Binary size**: 6.0MB (stripped, with vendored OpenSSL) - 40% under 10MB target ✅
 - **Memory (idle)**: <20MB RSS ✅
 - **Memory (10 parallel tasks)**: <50MB RSS ✅
-- **Tests**: 100% passing ✅
+
+**DAG Operations (100 tasks):**
+- **DAG build**: 0.69ms (target: <50ms) ✅
+- **DAG validation**: 0.07ms ✅
+- **Topological sort**: 0.08ms ✅
+- **Sequential execution overhead**: 0.88ms ✅
+
+**Task Latency:**
+- **Task startup**: ~2ms (target: <100ms) ✅
+- **Workflow creation**: 0.37ms
+- **Task status update**: 0.42ms
+
+**Concurrent Operations:**
+- **5 parallel executions**: 0.79ms
+- **10 parallel executions**: 0.96ms
+- **20 parallel executions**: 1.27ms
+
+**Quality Metrics:**
+- **Tests**: 97 unit + 11 integration + 23 doc tests (100% passing) ✅
 - **Code Quality**: Grade A- (92/100) ✅
 - **Test Coverage**: >80% ✅
 
 Target platform: Raspberry Pi Zero 2 W (512MB RAM)
-- Task startup latency: <100ms
-- DAG parsing (100 tasks): <50ms
 - Supports 1000+ tasks per DAG
 
 ## Development

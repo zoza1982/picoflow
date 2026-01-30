@@ -195,13 +195,6 @@ impl CronScheduler {
 
         Ok(())
     }
-
-    /// Get the number of scheduled jobs
-    pub fn job_count(&self) -> usize {
-        // tokio-cron-scheduler doesn't expose job count directly
-        // This is a placeholder - in production we'd track this ourselves
-        0
-    }
 }
 
 /// Validate cron expression format

@@ -44,6 +44,9 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
+/// Histogram bucket boundaries for task duration metrics (in seconds)
+const TASK_DURATION_BUCKETS: &[f64] = &[0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 300.0];
+
 /// Prometheus metrics server
 #[derive(Clone)]
 pub struct MetricsServer {
@@ -87,7 +90,7 @@ impl MetricsServer {
                 "picoflow_task_duration_seconds",
                 "Task execution duration in seconds",
             )
-            .buckets(vec![0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 300.0]),
+            .buckets(TASK_DURATION_BUCKETS.to_vec()),
             &["workflow", "task"],
         )
         .unwrap();
@@ -151,7 +154,7 @@ impl MetricsServer {
     /// # }
     /// ```
     pub async fn start(&self, port: u16) -> anyhow::Result<()> {
-        let addr = format!("0.0.0.0:{}", port);
+        let addr = format!("127.0.0.1:{}", port);
         let listener = TcpListener::bind(&addr).await?;
         info!("Metrics server listening on http://{}/metrics", addr);
 

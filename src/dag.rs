@@ -266,6 +266,11 @@ impl DagEngine {
             levels[level].push(self.graph[node].clone());
         }
 
+        // Sort tasks within each level alphabetically for deterministic output
+        for level in &mut levels {
+            level.sort();
+        }
+
         levels
     }
 

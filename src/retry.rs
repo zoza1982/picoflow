@@ -24,6 +24,9 @@
 use std::time::Duration;
 use tracing::{debug, warn};
 
+/// Maximum backoff delay in seconds (prevents unbounded exponential growth)
+pub const MAX_BACKOFF_SECONDS: u64 = 60;
+
 /// Retry configuration for task execution
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
@@ -160,7 +163,7 @@ impl Default for RetryState {
 pub fn calculate_backoff_delay(attempt: u32) -> Duration {
     let base_delay_secs = 1;
     let delay_secs = base_delay_secs * 2u64.pow(attempt.saturating_sub(1));
-    Duration::from_secs(delay_secs.min(60))
+    Duration::from_secs(delay_secs.min(MAX_BACKOFF_SECONDS))
 }
 
 #[cfg(test)]

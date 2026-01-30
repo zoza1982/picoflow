@@ -52,11 +52,9 @@ use crate::models::{
 };
 use async_trait::async_trait;
 use ssh2::{CheckResult, KnownHostFileKind, Session};
-use std::collections::HashMap;
 use std::io::Read;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -69,11 +67,7 @@ const MAX_CONNECTIONS_PER_HOST: usize = 4;
 /// **Phase 2 Implementation:** Creates a new SSH connection for each task execution.
 /// Connection pooling is deferred to Phase 3 for performance optimization.
 #[derive(Clone)]
-pub struct SshExecutor {
-    /// Placeholder for future connection pooling (Phase 3)
-    /// Will implement: (host:port, user) -> Vec<Session> with MAX_CONNECTIONS_PER_HOST limit
-    _connection_pool: Arc<Mutex<HashMap<String, ()>>>,
-}
+pub struct SshExecutor;
 
 impl SshExecutor {
     /// Create a new SSH executor
@@ -81,9 +75,7 @@ impl SshExecutor {
     /// **Note:** Connection pooling is not yet implemented (deferred to Phase 3).
     /// Each task execution will create a new SSH connection.
     pub fn new() -> Self {
-        Self {
-            _connection_pool: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self
     }
 
     /// Get path to known_hosts file
@@ -365,13 +357,22 @@ impl SshExecutor {
     }
 
     /// Execute SSH command in blocking context (for use in spawn_blocking)
+    ///
+    /// Note: The timeout is applied at the SSH session level, but spawn_blocking tasks
+    /// cannot be cancelled by tokio's timeout mechanism. The SSH library's internal
+    /// timeout will terminate long-running commands, but the blocking task itself
+    /// will not be interrupted.
     fn execute_ssh_blocking(
         &self,
         config: &SshConfig,
-        _timeout_secs: u64,
+        timeout_secs: u64,
     ) -> Result<ExecutionResult> {
         // Get connection from pool
         let session = self.get_connection(config)?;
+
+        // Set timeout on the session (in milliseconds)
+        // Note: This sets read/write timeouts for SSH operations
+        session.set_timeout((timeout_secs * 1000) as u32);
 
         // Open channel and execute command
         let mut channel = session.channel_session().map_err(|e| PicoFlowError::Ssh {
@@ -420,8 +421,8 @@ impl SshExecutor {
         })?;
 
         // Truncate output if needed
-        let (stdout, stdout_truncated) = truncate_output(&stdout);
-        let (stderr, stderr_truncated) = truncate_output(&stderr);
+        let (stdout, stdout_truncated) = crate::executors::truncate_output_str(&stdout);
+        let (stderr, stderr_truncated) = crate::executors::truncate_output_str(&stderr);
         let output_truncated = stdout_truncated || stderr_truncated;
 
         if output_truncated {
@@ -452,8 +453,9 @@ impl ExecutorTrait for SshExecutor {
     async fn execute(&self, config: &TaskExecutorConfig) -> anyhow::Result<ExecutionResult> {
         match config {
             TaskExecutorConfig::Ssh(ssh_config) => {
-                // Default timeout of 300 seconds if not specified
-                let result = self.execute_ssh(ssh_config, 300).await?;
+                // Use a very large timeout here since scheduler applies the actual timeout
+                // This prevents double-timeout issues and ensures scheduler timeout takes precedence
+                let result = self.execute_ssh(ssh_config, 86400).await?;
                 Ok(result)
             }
             _ => Err(anyhow::anyhow!("Invalid config type for SshExecutor")),
@@ -470,20 +472,6 @@ impl ExecutorTrait for SshExecutor {
 impl Default for SshExecutor {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Truncate output to MAX_OUTPUT_SIZE
-fn truncate_output(data: &str) -> (String, bool) {
-    let bytes = data.as_bytes();
-    let truncated = bytes.len() > MAX_OUTPUT_SIZE;
-
-    if truncated {
-        let truncated_bytes = &bytes[..MAX_OUTPUT_SIZE];
-        let output = String::from_utf8_lossy(truncated_bytes).to_string();
-        (output, true)
-    } else {
-        (data.to_string(), false)
     }
 }
 
@@ -586,23 +574,24 @@ mod tests {
 
     #[test]
     fn test_truncate_output() {
+        use crate::executors::truncate_output_str;
+
         let small_data = "hello world";
-        let (output, truncated) = truncate_output(small_data);
+        let (output, truncated) = truncate_output_str(small_data);
         assert_eq!(output, "hello world");
         assert!(!truncated);
 
         // Create large data
         let large_data = "x".repeat(MAX_OUTPUT_SIZE + 1000);
-        let (output, truncated) = truncate_output(&large_data);
+        let (output, truncated) = truncate_output_str(&large_data);
         assert_eq!(output.len(), MAX_OUTPUT_SIZE);
         assert!(truncated);
     }
 
     #[test]
     fn test_ssh_executor_new() {
-        let executor = SshExecutor::new();
-        let pool = executor._connection_pool.lock().unwrap();
-        assert_eq!(pool.len(), 0);
+        let _executor = SshExecutor::new();
+        // Connection pooling deferred to Phase 3
     }
 
     // Note: Integration tests with actual SSH connections would require

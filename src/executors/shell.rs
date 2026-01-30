@@ -62,8 +62,8 @@ impl ShellExecutor {
         match output_result {
             Ok(Ok(output)) => {
                 // Truncate output if needed
-                let (stdout, stdout_truncated) = truncate_output(&output.stdout);
-                let (stderr, stderr_truncated) = truncate_output(&output.stderr);
+                let (stdout, stdout_truncated) = crate::executors::truncate_output_bytes(&output.stdout);
+                let (stderr, stderr_truncated) = crate::executors::truncate_output_bytes(&output.stderr);
                 let output_truncated = stdout_truncated || stderr_truncated;
 
                 let status = if output.status.success() {
@@ -111,8 +111,9 @@ impl ExecutorTrait for ShellExecutor {
     async fn execute(&self, config: &TaskExecutorConfig) -> anyhow::Result<ExecutionResult> {
         match config {
             TaskExecutorConfig::Shell(shell_config) => {
-                // Default timeout of 300 seconds if not specified
-                let result = self.execute_shell(shell_config, 300).await?;
+                // Use a very large timeout here since scheduler applies the actual timeout
+                // This prevents double-timeout issues and ensures scheduler timeout takes precedence
+                let result = self.execute_shell(shell_config, 86400).await?;
                 Ok(result)
             }
             _ => Err(anyhow::anyhow!("Invalid config type for ShellExecutor")),
@@ -139,19 +140,6 @@ impl Default for ShellExecutor {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Truncate output to MAX_OUTPUT_SIZE
-fn truncate_output(data: &[u8]) -> (String, bool) {
-    let truncated = data.len() > MAX_OUTPUT_SIZE;
-    let bytes = if truncated {
-        &data[..MAX_OUTPUT_SIZE]
-    } else {
-        data
-    };
-
-    let output = String::from_utf8_lossy(bytes).to_string();
-    (output, truncated)
 }
 
 #[cfg(test)]
@@ -232,14 +220,16 @@ mod tests {
 
     #[test]
     fn test_truncate_output() {
+        use crate::executors::truncate_output_bytes;
+
         let small_data = b"hello";
-        let (output, truncated) = truncate_output(small_data);
+        let (output, truncated) = truncate_output_bytes(small_data);
         assert_eq!(output, "hello");
         assert!(!truncated);
 
         // Create large data
         let large_data = vec![b'x'; MAX_OUTPUT_SIZE + 1000];
-        let (output, truncated) = truncate_output(&large_data);
+        let (output, truncated) = truncate_output_bytes(&large_data);
         assert_eq!(output.len(), MAX_OUTPUT_SIZE);
         assert!(truncated);
     }

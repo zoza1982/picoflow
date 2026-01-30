@@ -7,6 +7,7 @@ use crate::executors::shell::ShellExecutor;
 use crate::executors::ssh::SshExecutor;
 use crate::executors::ExecutorTrait;
 use crate::models::{TaskConfig, TaskStatus, WorkflowConfig};
+use crate::retry::calculate_backoff_delay;
 use crate::state::StateManager;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -156,6 +157,7 @@ impl TaskScheduler {
     ///
     /// Each level is executed concurrently, with a semaphore enforcing max_parallel limit.
     /// All tasks at a level must complete before moving to the next level.
+    /// Tasks are skipped if their dependencies failed (unless those deps had continue_on_failure).
     async fn execute_parallel(
         &self,
         execution_id: i64,
@@ -164,6 +166,7 @@ impl TaskScheduler {
         max_parallel: usize,
     ) -> Result<bool> {
         let mut workflow_success = true;
+        let mut failed_tasks: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Create semaphore to enforce max_parallel limit
         let semaphore = Arc::new(Semaphore::new(max_parallel));
@@ -182,6 +185,28 @@ impl TaskScheduler {
             for task_name in level_tasks {
                 let task = task_map[task_name].clone();
                 let task_name_owned = task_name.clone();
+
+                // Check if any dependencies failed (and didn't have continue_on_failure)
+                let mut should_skip = false;
+                for dep_name in &task.depends_on {
+                    if failed_tasks.contains(dep_name) {
+                        let dep_task = &task_map[dep_name];
+                        if !dep_task.continue_on_failure {
+                            warn!(
+                                "Skipping task '{}' because dependency '{}' failed",
+                                task_name_owned, dep_name
+                            );
+                            should_skip = true;
+                            failed_tasks.insert(task_name_owned.clone());
+                            break;
+                        }
+                    }
+                }
+
+                if should_skip {
+                    continue;
+                }
+
                 let semaphore_clone = Arc::clone(&semaphore);
 
                 // Share Arc references for the spawned task (no deep cloning)
@@ -235,12 +260,13 @@ impl TaskScheduler {
             // Wait for all tasks at this level to complete
             let results = futures::future::join_all(handles).await;
 
-            // Check results
+            // Check results and track failed tasks
             for result in results {
                 match result {
                     Ok((task_name, continue_on_failure, Ok(task_success))) => {
                         if !task_success {
                             workflow_success = false;
+                            failed_tasks.insert(task_name.clone());
 
                             if !continue_on_failure {
                                 error!(
@@ -258,6 +284,7 @@ impl TaskScheduler {
                     }
                     Ok((task_name, _, Err(e))) => {
                         error!("Task '{}' execution error: {}", task_name, e);
+                        failed_tasks.insert(task_name);
                         return Ok(false);
                     }
                     Err(e) => {
@@ -327,9 +354,9 @@ impl TaskScheduler {
 
                             // Set retry information
                             let next_retry_at =
-                                chrono::Utc::now() + chrono::Duration::from_std(delay).unwrap();
+                                chrono::Utc::now() + chrono::Duration::from_std(delay).unwrap_or_else(|_| chrono::Duration::seconds(60));
                             self.state_manager
-                                .set_task_retry(task_exec_id, attempt as i32, next_retry_at)
+                                .set_task_retry(task_exec_id, (attempt - 1) as i32, next_retry_at)
                                 .await?;
 
                             tokio::time::sleep(delay).await;
@@ -402,13 +429,6 @@ impl TaskScheduler {
             )),
         }
     }
-}
-
-/// Calculate exponential backoff delay
-fn calculate_backoff_delay(attempt: u32) -> std::time::Duration {
-    let base_delay_secs = 1;
-    let delay_secs = base_delay_secs * 2u64.pow(attempt - 1);
-    std::time::Duration::from_secs(delay_secs.min(60)) // Cap at 60 seconds
 }
 
 #[cfg(test)]

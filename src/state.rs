@@ -169,7 +169,7 @@ impl StateManager {
                 started_at TIMESTAMP NOT NULL,
                 completed_at TIMESTAMP,
                 status TEXT NOT NULL,
-                FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS task_executions (
@@ -185,7 +185,7 @@ impl StateManager {
                 attempt INTEGER DEFAULT 1,
                 retry_count INTEGER DEFAULT 0,
                 next_retry_at TIMESTAMP,
-                FOREIGN KEY (execution_id) REFERENCES executions(id)
+                FOREIGN KEY (execution_id) REFERENCES executions(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS retention_policy (
@@ -815,7 +815,10 @@ fn parse_task_status(s: &str) -> TaskStatus {
         "failed" => TaskStatus::Failed,
         "retrying" => TaskStatus::Retrying,
         "timeout" => TaskStatus::Timeout,
-        _ => TaskStatus::Failed,
+        _ => {
+            tracing::warn!("Unknown task status '{}', defaulting to Failed", s);
+            TaskStatus::Failed
+        }
     }
 }
 

@@ -104,8 +104,25 @@ pub fn parse_workflow_yaml(content: &str) -> Result<WorkflowConfig> {
         validate_task_name(&task.name)?;
     }
 
+    // Validate task executor config matches task type
+    for task in &config.tasks {
+        validate_task_executor_config(task)?;
+    }
+
     // Validate task dependencies exist
     validate_dependencies(&config)?;
+
+    // Validate max_parallel is at least 1 and not excessively large
+    if config.config.max_parallel == 0 {
+        return Err(PicoFlowError::Validation(
+            "max_parallel must be at least 1 to avoid deadlock".to_string(),
+        ));
+    }
+    if config.config.max_parallel > 256 {
+        return Err(PicoFlowError::Validation(
+            "max_parallel must be at most 256 to prevent resource exhaustion".to_string(),
+        ));
+    }
 
     // Apply global defaults to tasks
     apply_defaults(&mut config);
@@ -115,6 +132,13 @@ pub fn parse_workflow_yaml(content: &str) -> Result<WorkflowConfig> {
 
 /// Validate task name format and length
 fn validate_task_name(name: &str) -> Result<()> {
+    // Check empty name
+    if name.is_empty() {
+        return Err(PicoFlowError::InvalidTaskName {
+            name: name.to_string(),
+        });
+    }
+
     // Check length
     if name.len() > MAX_TASK_NAME_LEN {
         return Err(PicoFlowError::TaskNameTooLong {
@@ -131,6 +155,25 @@ fn validate_task_name(name: &str) -> Result<()> {
         return Err(PicoFlowError::InvalidTaskName {
             name: name.to_string(),
         });
+    }
+
+    Ok(())
+}
+
+/// Validate that TaskExecutorConfig variant matches the declared task_type
+fn validate_task_executor_config(task: &TaskConfig) -> Result<()> {
+    let config_matches = matches!(
+        (&task.task_type, &task.config),
+        (TaskType::Shell, TaskExecutorConfig::Shell(_))
+            | (TaskType::Ssh, TaskExecutorConfig::Ssh(_))
+            | (TaskType::Http, TaskExecutorConfig::Http(_))
+    );
+
+    if !config_matches {
+        return Err(PicoFlowError::Validation(format!(
+            "Task '{}' has type {:?} but config does not match",
+            task.name, task.task_type
+        )));
     }
 
     Ok(())

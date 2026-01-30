@@ -146,8 +146,14 @@ pub struct HttpConfig {
     pub body: Option<serde_yaml::Value>, // JSON body
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// HTTP request timeout in seconds.
+    ///
+    /// Note: This timeout is independent of the task-level timeout. The scheduler
+    /// applies the task-level timeout (from TaskConfig.timeout) as an outer timeout,
+    /// while this timeout applies specifically to the HTTP request. The effective
+    /// timeout will be whichever occurs first.
     #[serde(default = "default_timeout")]
-    pub timeout: u64, // seconds
+    pub timeout: u64,
     #[serde(default = "default_allow_private_ips")]
     pub allow_private_ips: bool, // Default: false (for security, blocks SSRF)
 }

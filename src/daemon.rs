@@ -46,6 +46,9 @@ use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::watch;
 use tracing::{debug, error, info, warn};
 
+/// Shutdown timeout in seconds for graceful daemon termination
+const SHUTDOWN_TIMEOUT_SECONDS: u64 = 30;
+
 /// Daemon manager for PicoFlow background service
 ///
 /// Manages the lifecycle of the PicoFlow daemon including:
@@ -125,21 +128,47 @@ impl Daemon {
     }
 
     /// Write PID file with current process ID
+    ///
+    /// Uses atomic file creation (O_EXCL) to prevent race conditions.
     fn write_pid_file(&self) -> Result<()> {
+        use std::fs::OpenOptions;
+
         let pid = std::process::id();
         info!("Writing PID file: {:?} (PID: {})", self.pid_file, pid);
 
-        fs::write(&self.pid_file, pid.to_string()).map_err(|e| {
-            PicoFlowError::Io(std::io::Error::other(format!(
-                "Failed to write PID file: {}",
-                e
-            )))
-        })?;
+        // Use create_new for atomic creation (fails if file exists)
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&self.pid_file)
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    PicoFlowError::Other(format!(
+                        "PID file already exists at {:?}. Another daemon may be running.",
+                        self.pid_file
+                    ))
+                } else {
+                    PicoFlowError::Io(std::io::Error::other(format!(
+                        "Failed to create PID file: {}",
+                        e
+                    )))
+                }
+            })?;
+
+        use std::io::Write;
+        file.write_all(pid.to_string().as_bytes())
+            .map_err(|e| {
+                PicoFlowError::Io(std::io::Error::other(format!(
+                    "Failed to write PID to file: {}",
+                    e
+                )))
+            })?;
 
         Ok(())
     }
 
-    /// Remove PID file
+    /// Remove PID file (unused, cleanup handled by PidFileGuard)
+    #[allow(dead_code)]
     fn remove_pid_file(&self) -> Result<()> {
         if self.pid_file.exists() {
             info!("Removing PID file: {:?}", self.pid_file);
@@ -224,6 +253,7 @@ impl Daemon {
     /// Gracefully shutdown the daemon
     ///
     /// This stops the cron scheduler and waits for any running tasks to complete.
+    /// Note: PID file cleanup is handled by PidFileGuard drop, not here.
     ///
     /// # Returns
     ///
@@ -237,9 +267,7 @@ impl Daemon {
         // Shutdown cron scheduler (this will wait for running jobs)
         self.cron_scheduler.shutdown().await?;
 
-        // Remove PID file
-        self.remove_pid_file()?;
-
+        // PID file cleanup is handled by PidFileGuard drop
         info!("Daemon shutdown complete");
 
         Ok(())
@@ -376,7 +404,7 @@ pub fn stop_daemon(pid_file: &Path) -> Result<()> {
     }
 
     // Wait for PID file to be removed (with timeout)
-    let timeout = std::time::Duration::from_secs(30);
+    let timeout = std::time::Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS);
     let start = std::time::Instant::now();
 
     while pid_file.exists() && start.elapsed() < timeout {
@@ -455,8 +483,14 @@ mod tests {
         daemon.write_pid_file().unwrap();
         assert!(pid_file.exists());
 
-        // Shutdown
+        // Shutdown (note: PID file cleanup is normally handled by PidFileGuard in run())
         daemon.shutdown().await.unwrap();
-        assert!(!pid_file.exists());
+
+        // In this test, PID file still exists because PidFileGuard wasn't used
+        // In real usage, run() creates PidFileGuard which cleans up on drop
+        assert!(pid_file.exists());
+
+        // Clean up manually for test
+        let _ = fs::remove_file(&pid_file);
     }
 }
