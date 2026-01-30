@@ -2,7 +2,7 @@
 
 ## Development Timeline
 
-**Target Release:** v1.0.0 - Q1 2026 (14 weeks)  
+**Target Release:** v0.1.1 - Q1 2026 (14 weeks)  
 **Baseline Platform:** Raspberry Pi Zero 2 W (512MB RAM, ARM Cortex-A53)
 
 ## Phase 0: Foundation (Weeks 1-2) ✅ COMPLETE
@@ -403,7 +403,7 @@ picoflow status --workflow simple-workflow
 - [ ] Security audit passed with no critical issues
 - [ ] Cross-compiled binaries for ARM32, ARM64, x86_64
 - [ ] GitHub release published with binaries
-- [ ] v1.0.0 tagged and released
+- [ ] v0.1.1 tagged and released
 
 ---
 
@@ -565,7 +565,7 @@ picoflow status --workflow simple-workflow
 - Prometheus metrics
 - Enhanced CLI
 
-### v1.0.0 (Phase 4 Complete)
+### v0.1.1 (Phase 4 Complete)
 - HTTP executor
 - Full documentation
 - Cross-platform binaries

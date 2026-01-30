@@ -328,7 +328,7 @@ A **regression** is detected when:
 - RAM: 16GB
 - Storage: SSD
 
-**Baseline Results (v1.0.0):**
+**Baseline Results (v0.1.1):**
 
 | Benchmark | Target | Actual | Status |
 |-----------|--------|--------|--------|

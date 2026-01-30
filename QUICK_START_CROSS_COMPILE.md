@@ -39,14 +39,14 @@ rustup target add armv7-unknown-linux-gnueabihf aarch64-unknown-linux-gnu x86_64
 
 ```bash
 # 1. Build binaries with version
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 
 # 2. Package for distribution
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 
 # 3. Tag and push (triggers GitHub Actions)
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
 
 # GitHub Actions will:
 # - Build all platforms
@@ -74,11 +74,11 @@ ssh pi@raspberrypi
 
 ```bash
 # After building release packages
-scp target/packages/picoflow-v1.0.0-arm32-linux.tar.gz pi@raspberrypi:~/
+scp target/packages/picoflow-v0.1.1-arm32-linux.tar.gz pi@raspberrypi:~/
 
 # On Pi
-tar -xzf picoflow-v1.0.0-arm32-linux.tar.gz
-cd picoflow-v1.0.0-arm32-linux
+tar -xzf picoflow-v0.1.1-arm32-linux.tar.gz
+cd picoflow-v0.1.1-arm32-linux
 sudo ./install.sh
 picoflow --version
 ```
@@ -99,8 +99,8 @@ qemu-arm-static -L /usr/arm-linux-gnueabihf/ \
 | Command | What It Does | Output |
 |---------|-------------|--------|
 | `./scripts/build-all.sh` | Build for all platforms | `target/*/release/picoflow` |
-| `./scripts/build-release.sh v1.0.0` | Build with version info | `target/release-binaries/*` |
-| `./scripts/package-release.sh v1.0.0` | Create .tar.gz packages | `target/packages/*.tar.gz` |
+| `./scripts/build-release.sh v0.1.1` | Build with version info | `target/release-binaries/*` |
+| `./scripts/package-release.sh v0.1.1` | Create .tar.gz packages | `target/packages/*.tar.gz` |
 | `./scripts/docker-build.sh` | Docker build (no setup) | `target/release-binaries/*` |
 
 ## Platform Reference

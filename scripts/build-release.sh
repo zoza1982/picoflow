@@ -13,7 +13,7 @@
 #
 # Examples:
 #   ./scripts/build-release.sh           # Use version from Cargo.toml
-#   ./scripts/build-release.sh v1.0.0    # Override version
+#   ./scripts/build-release.sh v0.1.1    # Override version
 #
 
 set -eo pipefail

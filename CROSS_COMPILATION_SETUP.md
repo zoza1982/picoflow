@@ -66,7 +66,7 @@ Create optimized release binaries with version embedding.
 
 **Usage:**
 ```bash
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 ```
 
 **Features:**
@@ -87,7 +87,7 @@ Create distribution packages with installers.
 
 **Usage:**
 ```bash
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 ```
 
 **Features:**
@@ -153,7 +153,7 @@ docker run --rm -v $(pwd):/workspace picoflow-builder arm32
 **Location:** `.github/workflows/release.yml`
 
 **Triggers:**
-- Git tags matching `v*.*.*` (e.g., `v1.0.0`)
+- Git tags matching `v*.*.*` (e.g., `v0.1.1`)
 - Manual workflow dispatch
 
 **Jobs:**
@@ -181,11 +181,11 @@ docker run --rm -v $(pwd):/workspace picoflow-builder arm32
 **Usage:**
 ```bash
 # Automatic (push tag)
-git tag v1.0.0
-git push origin v1.0.0
+git tag v0.1.1
+git push origin v0.1.1
 
 # Manual
-gh workflow run release.yml -f version=v1.0.0
+gh workflow run release.yml -f version=v0.1.1
 ```
 
 #### `cross-compile-test.yml`
@@ -292,7 +292,7 @@ gh workflow run release.yml -f version=v1.0.0
 
 **Raspberry Pi Zero 2 W (ARM 32-bit):**
 ```bash
-VERSION=v1.0.0
+VERSION=v0.1.1
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm32-linux.tar.gz
 tar -xzf picoflow-${VERSION}-arm32-linux.tar.gz
 cd picoflow-${VERSION}-arm32-linux
@@ -302,7 +302,7 @@ picoflow --version
 
 **Raspberry Pi 4/5 (ARM 64-bit):**
 ```bash
-VERSION=v1.0.0
+VERSION=v0.1.1
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-arm64-linux.tar.gz
 tar -xzf picoflow-${VERSION}-arm64-linux.tar.gz
 cd picoflow-${VERSION}-arm64-linux
@@ -312,7 +312,7 @@ picoflow --version
 
 **x86_64 Linux:**
 ```bash
-VERSION=v1.0.0
+VERSION=v0.1.1
 wget https://github.com/zoza1982/picoflow/releases/download/${VERSION}/picoflow-${VERSION}-x86_64-linux.tar.gz
 tar -xzf picoflow-${VERSION}-x86_64-linux.tar.gz
 cd picoflow-${VERSION}-x86_64-linux
@@ -347,17 +347,17 @@ rustup target add x86_64-unknown-linux-gnu
 **Complete Release Process:**
 ```bash
 # 1. Build release binaries
-./scripts/build-release.sh v1.0.0
+./scripts/build-release.sh v0.1.1
 
 # 2. Test binaries (on target platforms or with QEMU)
 # ...
 
 # 3. Package for distribution
-./scripts/package-release.sh v1.0.0
+./scripts/package-release.sh v0.1.1
 
 # 4. Create and push tag (triggers GitHub Actions)
-git tag -a v1.0.0 -m "Release v1.0.0"
-git push origin v1.0.0
+git tag -a v0.1.1 -m "Release v0.1.1"
+git push origin v0.1.1
 
 # GitHub Actions will:
 # - Build all platforms
@@ -500,7 +500,7 @@ cargo update
 
 All release binaries include SHA256 checksums:
 ```bash
-sha256sum -c picoflow-v1.0.0-arm32-linux.tar.gz.sha256
+sha256sum -c picoflow-v0.1.1-arm32-linux.tar.gz.sha256
 ```
 
 ### Build Reproducibility
