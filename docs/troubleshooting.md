@@ -1,7 +1,7 @@
 # PicoFlow Troubleshooting Guide
 
-**Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Version:** 0.1.1
+**Last Updated:** February 11, 2026
 
 ---
 
@@ -218,10 +218,10 @@ tasks:
       url: "http://example.com"
 
 # BAD: Unquoted special characters
-command: echo $PATH  # $ needs quoting
+command: echo $PATH  # Not an absolute path and $ needs quoting
 
-# GOOD: Quoted strings
-command: "echo $PATH"
+# GOOD: Absolute path with quoted strings
+command: "/bin/echo $PATH"
 ```
 
 3. Check for:
@@ -1566,6 +1566,6 @@ Include in your bug report:
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Document Version:** 0.1.1
+**Last Updated:** February 11, 2026
 **Feedback:** Report issues at https://github.com/zoza1982/picoflow/issues

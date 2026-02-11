@@ -508,7 +508,9 @@ tasks:
       command: "/bin/echo"
 "#;
         let result = parse_workflow_yaml(yaml);
-        assert!(matches!(result, Err(PicoFlowError::Validation(msg)) if msg.contains("Duplicate task name")));
+        assert!(
+            matches!(result, Err(PicoFlowError::Validation(msg)) if msg.contains("Duplicate task name"))
+        );
     }
 
     #[test]

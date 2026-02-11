@@ -223,7 +223,7 @@ Pending → Running → Success
 ```
 
 **Retry Logic:**
-- Exponential backoff: `delay = base_delay * 2^attempt`
+- Exponential backoff: `delay = base_delay * 2^(attempt-1)` (capped at 60s)
 - Configurable max retries per task
 - Default: 3 retries, 1s base delay
 
@@ -298,10 +298,9 @@ pub struct ExecutionResult {
     pub output_truncated: bool,      // True if output exceeded MAX_OUTPUT_SIZE
 }
 
-pub struct ExecutorConfig {
-    pub max_output_size: usize,      // Default: 10MB, prevents OOM from chatty commands
-    pub capture_output: bool,        // Default: true, can disable to save memory
-}
+// Note: There is no separate ExecutorConfig struct. Executor configuration
+// is handled via the TaskExecutorConfig enum (Shell, Ssh, Http variants).
+// Output truncation is enforced at MAX_OUTPUT_SIZE constant level.
 ```
 
 #### Shell Executor (`src/executors/shell.rs`)
@@ -374,9 +373,9 @@ tasks:
 
 #### SSH Executor (`src/executors/ssh.rs`)
 
-Remote command execution over SSH with connection pooling.
+Remote command execution over SSH with key-based authentication and host key verification.
 
-**Connection Pooling Design:**
+**Connection Pooling Design (Planned - Not Yet Implemented):**
 ```rust
 use ssh2::Session;
 use std::collections::HashMap;

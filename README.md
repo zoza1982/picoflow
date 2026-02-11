@@ -187,7 +187,7 @@ picoflow run backup-workflow.yaml
 picoflow workflow list
 
 # Check status of a specific workflow
-picoflow status --workflow backup-workflow
+picoflow status backup-workflow
 
 # Run in daemon mode (with scheduling)
 picoflow daemon start backup-workflow.yaml
@@ -199,13 +199,13 @@ picoflow daemon stop
 picoflow daemon status
 
 # View execution history
-picoflow history --workflow backup-workflow
+picoflow history backup-workflow
 
 # View workflow statistics
-picoflow stats --workflow backup-workflow
+picoflow stats backup-workflow
 
 # View task logs
-picoflow logs --workflow backup-workflow --task backup_database
+picoflow logs backup-workflow --task backup_database
 ```
 
 ## Architecture
@@ -269,7 +269,7 @@ Target platform: Raspberry Pi Zero 2 W (512MB RAM)
 
 ### Prerequisites
 
-- Rust 1.70+
+- Rust 1.83+
 - For cross-compilation: Docker or native toolchains
 
 ### Build

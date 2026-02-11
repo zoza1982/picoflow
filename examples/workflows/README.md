@@ -365,7 +365,8 @@ gzip -9 large_file.json
 - name: cleanup
   type: shell
   config:
-    command: "rm -f /tmp/temp_*.json"
+    command: "/bin/rm"
+    args: ["-f", "/tmp/temp_*.json"]
   continue_on_failure: true
 ```
 

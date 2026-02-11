@@ -1,7 +1,7 @@
 # PicoFlow FAQ (Frequently Asked Questions)
 
-**Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Version:** 0.1.1
+**Last Updated:** February 11, 2026
 
 ---
 
@@ -876,6 +876,6 @@ Contact via GitHub Discussions if interested.
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Document Version:** 0.1.1
+**Last Updated:** February 11, 2026
 **Feedback:** Report issues at https://github.com/zoza1982/picoflow/issues

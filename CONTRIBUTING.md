@@ -80,7 +80,7 @@ What should happen
 What actually happens
 
 **Environment:**
-- PicoFlow version: 1.0.0
+- PicoFlow version: 0.1.1
 - OS: Raspberry Pi OS (Debian 12)
 - Hardware: Raspberry Pi Zero 2 W
 - Rust version: 1.75.0
@@ -164,7 +164,7 @@ Join the community and help others:
 
 ### Prerequisites
 
-- **Rust:** 1.70 or newer
+- **Rust:** 1.83 or newer (stable)
 - **Git:** For version control
 - **SQLite:** Usually pre-installed on Linux/macOS
 - **SSH:** For testing SSH executor
@@ -975,6 +975,6 @@ Thank you for contributing to PicoFlow! Every contribution, no matter how small,
 
 ---
 
-**Document Version:** 1.0.0
+**Document Version:** 0.1.1
 **Last Updated:** November 12, 2025
 **License:** MIT
