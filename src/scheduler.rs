@@ -372,13 +372,21 @@ impl TaskScheduler {
                     }
                 }
                 Err(e) => {
-                    error!("Task '{}' execution error: {}", task.name, e);
+                    let error_msg = format!("{}", e);
+                    let is_timeout = error_msg.contains("timed out");
+                    let status = if is_timeout {
+                        TaskStatus::Timeout
+                    } else {
+                        TaskStatus::Failed
+                    };
 
-                    // Update task status to failed
+                    error!("Task '{}' execution error ({}): {}", task.name, status, e);
+
+                    // Update task status
                     self.state_manager
                         .update_task_status(
                             task_exec_id,
-                            TaskStatus::Failed,
+                            status,
                             None,
                             None,
                             Some(&format!("Execution error: {}", e)),
