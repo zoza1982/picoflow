@@ -1,7 +1,7 @@
 # PicoFlow User Guide
 
-**Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Version:** 0.1.1
+**Last Updated:** February 11, 2026
 
 ---
 
@@ -94,7 +94,7 @@ picoflow --version
 ### From Source
 
 Prerequisites:
-- Rust 1.70 or newer
+- Rust 1.83 or newer (stable)
 - Git
 
 ```bash
@@ -157,14 +157,14 @@ tasks:
   - name: say_hello
     type: shell
     config:
-      command: "echo"
+      command: "/bin/echo"
       args: ["Hello from PicoFlow!"]
 
   - name: show_date
     type: shell
     depends_on: [say_hello]
     config:
-      command: "date"
+      command: "/bin/date"
 ```
 
 ### Step 2: Validate the Workflow
@@ -224,19 +224,19 @@ tasks:
   - name: task_a
     type: shell
     config:
-      command: "echo"
+      command: "/bin/echo"
       args: ["Task A running"]
 
   - name: task_b
     type: shell
     config:
-      command: "echo"
+      command: "/bin/echo"
       args: ["Task B running"]
 
   - name: task_c
     type: shell
     config:
-      command: "echo"
+      command: "/bin/echo"
       args: ["Task C running"]
 
   # This task depends on all three and runs last
@@ -244,7 +244,7 @@ tasks:
     type: shell
     depends_on: [task_a, task_b, task_c]
     config:
-      command: "echo"
+      command: "/bin/echo"
       args: ["All parallel tasks completed!"]
 ```
 
@@ -300,8 +300,8 @@ tasks:                           # Required: List of tasks
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `max_parallel` | integer | 10 | Maximum number of tasks running simultaneously |
-| `retry_default` | integer | 0 | Default retry count for all tasks |
+| `max_parallel` | integer | 4 | Maximum number of tasks running simultaneously (1-256) |
+| `retry_default` | integer | 3 | Default retry count for all tasks |
 | `timeout_default` | integer | 300 | Default timeout in seconds for all tasks |
 
 #### Task Fields
@@ -394,7 +394,7 @@ tasks:
     type: shell
     depends_on: [load_warehouse]
     config:
-      command: "rm"
+      command: "/bin/rm"
       args: ["-f", "/tmp/db1.sql", "/tmp/db2.sql", "/tmp/*.sql"]
     continue_on_failure: true
 ```
@@ -414,9 +414,9 @@ Execute commands on the local system where PicoFlow is running.
 ```yaml
 type: shell
 config:
-  command: string        # Required: Command to execute (absolute path recommended)
+  command: string        # Required: Command to execute (must be absolute path)
   args: [string]        # Optional: Command arguments
-  working_dir: string   # Optional: Working directory (default: picoflow's cwd)
+  workdir: string   # Optional: Working directory (default: picoflow's cwd)
   env: {}              # Optional: Environment variables
 ```
 
@@ -452,7 +452,7 @@ config:
   config:
     command: "/usr/bin/python3"
     args: ["/opt/scripts/process_data.py", "--mode", "production"]
-    working_dir: "/opt/scripts"
+    workdir: "/opt/scripts"
 ```
 
 **Security Note:** Always use absolute paths for commands to prevent PATH injection attacks. Never construct commands from user input.
@@ -471,6 +471,8 @@ config:
   user: string          # Required: SSH username
   command: string       # Required: Command to execute remotely
   key_path: string      # Optional: Path to SSH private key (default: ~/.ssh/id_rsa)
+  port: integer         # Optional: SSH port (default: 22)
+  verify_host_key: bool # Optional: Verify host key (default: true). Prevents MITM attacks.
   timeout: integer      # Optional: Connection timeout in seconds (default: 30)
 ```
 
@@ -552,7 +554,8 @@ config:
   headers: {}          # Optional: HTTP headers as key-value pairs
   body: {}             # Optional: Request body (JSON object)
   timeout: integer     # Optional: Request timeout in seconds (default: 30)
-  expected_status: [int] # Optional: List of success status codes (default: [200-299])
+  allow_private_ips: bool  # Optional: Allow requests to private IPs (default: false)
+                           # SECURITY: Blocks SSRF attacks when false
 ```
 
 **Example: GET Request**
@@ -608,8 +611,7 @@ config:
   config:
     url: "https://api.example.com/tmp-resources"
     method: DELETE
-    expected_status: [200, 204, 404]
-  continue_on_failure: true
+  continue_on_failure: true  # 2xx status = success, 4xx/5xx = failure
 ```
 
 **Example: API Workflow**
@@ -648,13 +650,12 @@ tasks:
     config:
       url: "https://app.example.com/health"
       method: GET
-      expected_status: [200]
     retry: 3
 ```
 
 **Success Criteria:**
 
-- HTTP status code in range 200-299 (or matching `expected_status`)
+- HTTP status code in range 200-299
 - No connection timeout
 - Valid response received
 
@@ -705,7 +706,7 @@ max_seconds = 3600
 
 # Parallel execution limits
 [execution]
-max_parallel = 10
+max_parallel = 4
 ```
 
 ### Command-Line Options
@@ -1476,7 +1477,7 @@ picoflow_task_retries_total{workflow="backup-workflow",task="backup_database"} 8
 ```
 # HELP picoflow_info PicoFlow version info
 # TYPE picoflow_info gauge
-picoflow_info{version="1.0.0"} 1
+picoflow_info{version="0.1.1"} 1
 
 # HELP picoflow_uptime_seconds PicoFlow daemon uptime
 # TYPE picoflow_uptime_seconds counter
@@ -1561,7 +1562,7 @@ config:
   type: shell
   depends_on: [main_task]
   config:
-    command: "rm"
+    command: "/bin/rm"
     args: ["-rf", "/tmp/workflow_temp"]
   continue_on_failure: true
 ```
@@ -1596,7 +1597,7 @@ tasks:
   - name: cleanup_old_logs
     type: shell
     config:
-      command: "find"
+      command: "/usr/bin/find"
       args: ["/var/lib/picoflow/logs", "-mtime", "+7", "-delete"]
 ```
 
@@ -1673,7 +1674,7 @@ config:
   type: shell
   depends_on: [cpu_intensive_task]
   config:
-    command: "sleep"
+    command: "/bin/sleep"
     args: ["30"]
 ```
 
@@ -1946,6 +1947,6 @@ For more troubleshooting, see the [Troubleshooting Guide](troubleshooting.md).
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Document Version:** 0.1.1
+**Last Updated:** February 11, 2026
 **Feedback:** Report issues at https://github.com/zoza1982/picoflow/issues

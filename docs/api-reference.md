@@ -1,7 +1,7 @@
 # PicoFlow API Reference
 
-**Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Version:** 0.1.1
+**Last Updated:** February 11, 2026
 
 ---
 
@@ -30,8 +30,8 @@ name: string                     # Required
 description: string              # Optional
 schedule: string                 # Optional (cron expression)
 config:                          # Optional
-  max_parallel: integer          # Optional (default: 10)
-  retry_default: integer         # Optional (default: 0)
+  max_parallel: integer          # Optional (default: 4)
+  retry_default: integer         # Optional (default: 3)
   timeout_default: integer       # Optional (default: 300)
 tasks: [Task]                    # Required (minimum 1 task)
 ```
@@ -79,8 +79,8 @@ Global workflow configuration object.
 
 | Field | Type | Default | Range | Description |
 |-------|------|---------|-------|-------------|
-| `max_parallel` | integer | 10 | 1-100 | Maximum concurrent tasks |
-| `retry_default` | integer | 0 | 0-100 | Default retry count for all tasks |
+| `max_parallel` | integer | 4 | 1-256 | Maximum concurrent tasks |
+| `retry_default` | integer | 3 | 0-100 | Default retry count for all tasks |
 | `timeout_default` | integer | 300 | 0-86400 | Default timeout in seconds (0 = no timeout) |
 
 **Example:**
@@ -150,10 +150,10 @@ continue_on_failure: boolean     # Optional (default: false)
 
 - **Type:** Integer
 - **Range:** 0-100
-- **Default:** Inherited from `config.retry_default` (default: 0)
+- **Default:** Inherited from `config.retry_default` (default: 3)
 - **Example:** `3`
 - **Description:** Number of retry attempts on failure
-- **Behavior:** Exponential backoff between retries (2^attempt seconds)
+- **Behavior:** Exponential backoff between retries (2^(attempt-1) seconds, capped at 60s)
 
 #### `timeout` (optional)
 
@@ -189,7 +189,7 @@ type: shell
 config:
   command: string                # Required
   args: [string]                # Optional
-  working_dir: string           # Optional
+  workdir: string           # Optional
   env: {string: string}         # Optional
 ```
 
@@ -211,7 +211,7 @@ config:
 - **Description:** Command-line arguments passed to command
 - **Security:** Arguments are passed safely (no shell interpolation)
 
-#### `working_dir` (optional)
+#### `workdir` (optional)
 
 - **Type:** String (absolute path)
 - **Default:** PicoFlow's current working directory
@@ -243,7 +243,7 @@ config:
       - "-czf"
       - "/backup/logs-$(date +%Y%m%d).tar.gz"
       - "/var/log/myapp"
-    working_dir: "/tmp"
+    workdir: "/tmp"
     env:
       BACKUP_RETENTION_DAYS: "7"
   retry: 2
@@ -396,7 +396,6 @@ config:
   headers: {string: string}      # Optional
   body: object                   # Optional
   timeout: integer               # Optional (default: 30)
-  expected_status: [integer]     # Optional (default: [200-299])
 ```
 
 ### Configuration Fields
@@ -455,13 +454,6 @@ config:
 - **Example:** `60`
 - **Description:** Request timeout (connection + read)
 
-#### `expected_status` (optional)
-
-- **Type:** Array of integers
-- **Default:** `[200, 201, 202, 203, 204, 205, 206, 207, 208, 226]` (2xx range)
-- **Example:** `[200, 404]` (success if 200 OR 404)
-- **Description:** HTTP status codes considered successful
-
 ### Complete Examples
 
 #### GET Request
@@ -518,14 +510,13 @@ config:
   config:
     url: "https://api.example.com/tmp-resources/xyz"
     method: DELETE
-    expected_status: [200, 204, 404]  # Success if deleted OR already gone
-  continue_on_failure: true
+  continue_on_failure: true  # 2xx status = success, 4xx/5xx = failure
 ```
 
 ### Success Criteria
 
 - HTTP response received
-- Status code in `expected_status` list
+- Status code in 2xx range (200-299)
 - No connection timeout
 
 ### Authentication
@@ -664,7 +655,7 @@ Task exit codes depend on the executor:
 - 124 = Command timed out
 
 **HTTP executor:**
-- 0 = HTTP status in expected_status
+- 0 = HTTP status in 2xx range
 - 1 = HTTP error (wrong status, timeout, connection failed)
 
 ### Checking Exit Codes
@@ -705,7 +696,7 @@ Environment variables can be referenced in workflow YAML:
 - name: use_env_vars
   type: shell
   config:
-    command: "echo"
+    command: "/bin/echo"
     args: ["Database: ${DB_NAME}"]
     env:
       DB_HOST: "${DB_HOST}"
@@ -1060,7 +1051,7 @@ max_seconds = 3600
 
 # Execution configuration
 [execution]
-max_parallel = 10
+max_parallel = 4
 
 # Log retention
 [logs]
@@ -1223,6 +1214,6 @@ ORDER BY avg_duration DESC;
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** November 12, 2025
+**Document Version:** 0.1.1
+**Last Updated:** February 11, 2026
 **Feedback:** Report issues at https://github.com/zoza1982/picoflow/issues

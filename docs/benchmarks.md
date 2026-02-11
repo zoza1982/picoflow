@@ -595,5 +595,5 @@ When adding new benchmarks:
 ---
 
 **Last Updated:** 2025-11-12
-**Version:** 1.0.0
+**Version:** 0.1.1
 **Maintainer:** Zoran Vukmirica
