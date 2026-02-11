@@ -99,9 +99,18 @@ pub fn parse_workflow_yaml(content: &str) -> Result<WorkflowConfig> {
         });
     }
 
-    // Validate task names
-    for task in &config.tasks {
-        validate_task_name(&task.name)?;
+    // Validate task names and check for duplicates
+    {
+        let mut seen_names = std::collections::HashSet::with_capacity(config.tasks.len());
+        for task in &config.tasks {
+            validate_task_name(&task.name)?;
+            if !seen_names.insert(&task.name) {
+                return Err(PicoFlowError::Validation(format!(
+                    "Duplicate task name '{}'",
+                    task.name,
+                )));
+            }
+        }
     }
 
     // Validate task executor config matches task type
@@ -482,6 +491,24 @@ tasks:
             validate_shell_config(&config),
             Err(PicoFlowError::PathTraversal(_))
         ));
+    }
+
+    #[test]
+    fn test_duplicate_task_names_rejected() {
+        let yaml = r#"
+name: test
+tasks:
+  - name: task1
+    type: shell
+    config:
+      command: "/bin/true"
+  - name: task1
+    type: shell
+    config:
+      command: "/bin/echo"
+"#;
+        let result = parse_workflow_yaml(yaml);
+        assert!(matches!(result, Err(PicoFlowError::Validation(msg)) if msg.contains("Duplicate task name")));
     }
 
     #[test]

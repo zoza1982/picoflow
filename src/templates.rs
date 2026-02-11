@@ -59,7 +59,8 @@ tasks:
   - name: hello
     type: shell
     config:
-      command: "echo 'Hello from PicoFlow!'"
+      command: "/bin/echo"
+      args: ["Hello from PicoFlow!"]
 "#;
 
 /// Multiple shell tasks demonstrating dependencies, retry, and timeout.
@@ -77,20 +78,23 @@ tasks:
   - name: check_disk_space
     type: shell
     config:
-      command: "df -h / | tail -1"
+      command: "/bin/sh"
+      args: ["-c", "df -h / | tail -1"]
     timeout: 30
 
   - name: create_output_dir
     type: shell
     depends_on: [check_disk_space]
     config:
-      command: "mkdir -p /tmp/picoflow-output"
+      command: "/bin/mkdir"
+      args: ["-p", "/tmp/picoflow-output"]
 
   - name: generate_report
     type: shell
     depends_on: [create_output_dir]
     config:
-      command: "date > /tmp/picoflow-output/report.txt && echo 'Report generated'"
+      command: "/bin/sh"
+      args: ["-c", "date > /tmp/picoflow-output/report.txt && echo 'Report generated'"]
     retry: 3
     timeout: 60
 
@@ -98,7 +102,8 @@ tasks:
     type: shell
     depends_on: [generate_report]
     config:
-      command: "rm -rf /tmp/picoflow-output"
+      command: "/bin/rm"
+      args: ["-rf", "/tmp/picoflow-output"]
     continue_on_failure: true
 "#;
 
@@ -146,6 +151,8 @@ tasks:
 const TEMPLATE_HTTP: &str = r#"# PicoFlow Workflow — HTTP Tasks
 # Demonstrates HTTP API calls with GET and POST methods.
 # NOTE: Replace URLs with your actual API endpoints.
+# NOTE: Replace "Bearer YOUR_API_TOKEN" with your actual token value.
+#       PicoFlow does NOT perform environment variable substitution in YAML values.
 name: http-workflow
 description: "HTTP API calls (GET/POST) with headers"
 
@@ -165,7 +172,7 @@ tasks:
       url: "https://api.example.com/data"
       method: GET
       headers:
-        Authorization: "Bearer ${API_TOKEN}"
+        Authorization: "Bearer YOUR_API_TOKEN"
         Accept: "application/json"
       timeout: 30
 
@@ -177,7 +184,7 @@ tasks:
       method: POST
       headers:
         Content-Type: "application/json"
-        Authorization: "Bearer ${API_TOKEN}"
+        Authorization: "Bearer YOUR_API_TOKEN"
       body: '{"status": "completed", "source": "picoflow"}'
       timeout: 30
     retry: 3
@@ -235,7 +242,8 @@ tasks:
     type: shell
     depends_on: [backup_database]
     config:
-      command: "ssh deploy@192.168.1.100 'test -f /backup/db-*.sql.gz && echo OK'"
+      command: "/bin/sh"
+      args: ["-c", "ssh deploy@192.168.1.100 'test -f /backup/db-*.sql.gz && echo OK'"]
     retry: 1
 
   # Step 4: Notify API
@@ -247,7 +255,7 @@ tasks:
       method: POST
       headers:
         Content-Type: "application/json"
-        Authorization: "Bearer ${API_TOKEN}"
+        Authorization: "Bearer YOUR_API_TOKEN"
       body: '{"event": "backup_complete", "workflow": "full-workflow"}'
       timeout: 15
 

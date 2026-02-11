@@ -53,6 +53,10 @@ impl ShellExecutor {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
+        // Ensure child process is killed when the future is dropped (e.g. on timeout).
+        // Without this, timed-out processes become orphan zombies.
+        cmd.kill_on_drop(true);
+
         // Execute with timeout
         let output_result =
             tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output()).await;
