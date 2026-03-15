@@ -17,7 +17,7 @@
 //!
 //! This executor implements critical security measures:
 //! - NO password authentication support (key-based only)
-//! - Commands are NOT executed through a shell (prevents injection)
+//! - Commands are passed to the remote SSH server's shell - workflow YAML files should be treated as executable code
 //! - Host key verification is enforced
 //! - All user inputs are validated
 //!
@@ -258,8 +258,18 @@ impl SshExecutor {
             message: format!("SSH handshake failed: {}", e),
         })?;
 
-        // Verify host key if enabled
-        if config.verify_host_key {
+        // Verify host key if enabled or enforced by environment variable
+        let enforce_verification = std::env::var("PICOFLOW_ENFORCE_HOST_KEY_VERIFICATION")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if config.verify_host_key || enforce_verification {
+            if enforce_verification && !config.verify_host_key {
+                warn!(
+                    "Host key verification enforced by PICOFLOW_ENFORCE_HOST_KEY_VERIFICATION for {}",
+                    config.host
+                );
+            }
             Self::verify_host_key(&session, config)?;
         } else {
             warn!(
@@ -316,16 +326,15 @@ impl SshExecutor {
     ///
     /// # Security
     ///
-    /// Commands are executed directly through SSH exec channel, NOT through a shell.
-    /// This prevents command injection attacks. No shell metacharacters are interpreted.
+    /// Commands are sent via SSH exec channel to the remote sshd, which passes them
+    /// through `/bin/sh -c`. Shell metacharacters ARE interpreted on the remote host.
+    /// Workflow YAML files should be treated as executable code.
     async fn execute_ssh(&self, config: &SshConfig, timeout_secs: u64) -> Result<ExecutionResult> {
         // Validate configuration
         Self::validate_config(config)?;
 
-        info!(
-            "Executing SSH command on {}@{}: {}",
-            config.user, config.host, config.command
-        );
+        info!("Executing SSH command on {}@{}", config.user, config.host);
+        debug!("SSH command: {}", config.command);
 
         let start = std::time::Instant::now();
 
@@ -382,7 +391,7 @@ impl SshExecutor {
 
         debug!("Executing command: {}", config.command);
 
-        // Execute command (NOT through shell - security measure)
+        // Execute command (sent to remote sshd which passes it through /bin/sh -c)
         channel
             .exec(&config.command)
             .map_err(|e| PicoFlowError::Ssh {
@@ -390,19 +399,21 @@ impl SshExecutor {
                 message: format!("Failed to execute command: {}", e),
             })?;
 
-        // Read stdout
+        // Read stdout (bounded to MAX_OUTPUT_SIZE + 1 so truncation detection works)
         let mut stdout = String::new();
-        channel
+        (&mut channel)
+            .take(MAX_OUTPUT_SIZE as u64 + 1)
             .read_to_string(&mut stdout)
             .map_err(|e| PicoFlowError::Ssh {
                 host: config.host.clone(),
                 message: format!("Failed to read stdout: {}", e),
             })?;
 
-        // Read stderr
+        // Read stderr (bounded to MAX_OUTPUT_SIZE + 1 so truncation detection works)
         let mut stderr = String::new();
         channel
             .stderr()
+            .take(MAX_OUTPUT_SIZE as u64 + 1)
             .read_to_string(&mut stderr)
             .map_err(|e| PicoFlowError::Ssh {
                 host: config.host.clone(),

@@ -225,6 +225,41 @@ impl HttpExecutor {
         Ok(())
     }
 
+    /// Validate that DNS-resolved IPs are not private (prevents DNS rebinding)
+    ///
+    /// This resolves the hostname and checks all resolved IPs against SSRF rules,
+    /// closing the TOCTOU gap between URL validation and actual request.
+    async fn validate_resolved_ips(url: &str, allow_private_ips: bool) -> Result<()> {
+        if allow_private_ips {
+            return Ok(());
+        }
+
+        let parsed_url = reqwest::Url::parse(url)
+            .map_err(|e| PicoFlowError::Validation(format!("Invalid URL: {}", e)))?;
+
+        // Only resolve for domain hosts (IP addresses were already validated)
+        let host = match parsed_url.host() {
+            Some(Host::Domain(domain)) => domain.to_string(),
+            _ => return Ok(()), // IPs already validated in validate_ssrf
+        };
+
+        let port = parsed_url.port_or_known_default().unwrap_or(80);
+        let addr = format!("{}:{}", host, port);
+
+        let resolved = tokio::net::lookup_host(&addr).await.map_err(|e| {
+            PicoFlowError::Http(format!("DNS resolution failed for {}: {}", host, e))
+        })?;
+
+        for socket_addr in resolved {
+            match socket_addr.ip() {
+                std::net::IpAddr::V4(ip) => Self::validate_ipv4_not_private(ip)?,
+                std::net::IpAddr::V6(ip) => Self::validate_ipv6_not_private(ip)?,
+            }
+        }
+
+        Ok(())
+    }
+
     /// Validate HTTP configuration
     fn validate_config(config: &HttpConfig) -> Result<()> {
         // Validate URL
@@ -295,12 +330,18 @@ impl HttpExecutor {
         // Validate configuration
         Self::validate_config(config)?;
 
+        // DNS rebinding protection: resolve and validate IPs
+        Self::validate_resolved_ips(&config.url, config.allow_private_ips).await?;
+
         info!(
             "Executing HTTP {} request to {}",
             format!("{:?}", config.method).to_uppercase(),
             config.url
         );
-        debug!("Request headers: {:?}", config.headers);
+        debug!(
+            "Request headers: {:?}",
+            crate::executors::redact_headers(&config.headers)
+        );
 
         let start = std::time::Instant::now();
 
@@ -323,7 +364,7 @@ impl HttpExecutor {
                 PicoFlowError::Http(format!("Failed to serialize request body: {}", e))
             })?;
 
-            debug!("Request body: {}", json_body);
+            tracing::trace!("Request body: {}", json_body);
             request = request.json(&json_body);
         }
 
@@ -672,6 +713,20 @@ mod tests {
     async fn test_http_executor_default() {
         let executor = HttpExecutor::default();
         assert!(std::mem::size_of_val(&executor) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_dns_rebinding_localhost() {
+        // localhost resolves to 127.0.0.1, which should be blocked
+        let result = HttpExecutor::validate_resolved_ips("http://localhost:8080/test", false).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_ssrf_dns_rebinding_allowed_private() {
+        // Should pass when allow_private_ips is true
+        let result = HttpExecutor::validate_resolved_ips("http://localhost:8080/test", true).await;
+        assert!(result.is_ok());
     }
 
     // Note: Integration tests with mock HTTP server are in tests/http_executor_integration.rs

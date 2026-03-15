@@ -6,6 +6,7 @@ pub mod ssh;
 
 use crate::models::{ExecutionResult, TaskExecutorConfig, MAX_OUTPUT_SIZE};
 use async_trait::async_trait;
+use std::collections::HashMap;
 
 /// Executor trait for different task types
 #[async_trait]
@@ -15,6 +16,31 @@ pub trait ExecutorTrait: Send + Sync {
 
     /// Perform a health check
     async fn health_check(&self) -> anyhow::Result<()>;
+}
+
+/// Redact sensitive header values for safe logging
+///
+/// Headers whose names match common authentication/session headers
+/// (case-insensitive) will have their values replaced with `[REDACTED]`.
+pub(crate) fn redact_headers(headers: &HashMap<String, String>) -> HashMap<String, String> {
+    const SENSITIVE_HEADERS: &[&str] = &[
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+        "proxy-authorization",
+    ];
+    headers
+        .iter()
+        .map(|(k, v)| {
+            if SENSITIVE_HEADERS.contains(&k.to_lowercase().as_str()) {
+                (k.clone(), "[REDACTED]".to_string())
+            } else {
+                (k.clone(), v.clone())
+            }
+        })
+        .collect()
 }
 
 /// Truncate string output to MAX_OUTPUT_SIZE

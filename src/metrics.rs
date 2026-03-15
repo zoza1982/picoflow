@@ -57,6 +57,7 @@ pub struct MetricsServer {
     active_workflows: Arc<Gauge>,
     active_tasks: Arc<Gauge>,
     memory_bytes: Arc<Gauge>,
+    metrics_token: Option<String>,
 }
 
 impl MetricsServer {
@@ -132,7 +133,19 @@ impl MetricsServer {
             active_workflows: Arc::new(active_workflows),
             active_tasks: Arc::new(active_tasks),
             memory_bytes: Arc::new(memory_bytes),
+            metrics_token: None,
         }
+    }
+
+    /// Create a new metrics server with bearer token authentication
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - Bearer token required for accessing the metrics endpoint
+    pub fn with_token(token: String) -> Self {
+        let mut server = Self::new();
+        server.metrics_token = Some(token);
+        server
     }
 
     /// Start the HTTP metrics server on the specified port
@@ -161,16 +174,23 @@ impl MetricsServer {
         let registry = self.registry.clone();
         let memory_bytes = self.memory_bytes.clone();
 
+        // Env var takes precedence over the token passed via with_token()
+        let auth_token = std::env::var("PICOFLOW_METRICS_TOKEN")
+            .ok()
+            .or_else(|| self.metrics_token.clone());
+
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, _addr)) => {
                         let registry = registry.clone();
                         let memory_bytes = memory_bytes.clone();
+                        let auth_token = auth_token.clone();
 
                         tokio::spawn(async move {
                             if let Err(e) =
-                                Self::handle_request(stream, registry, memory_bytes).await
+                                Self::handle_request(stream, registry, memory_bytes, auth_token)
+                                    .await
                             {
                                 error!("Error handling metrics request: {}", e);
                             }
@@ -186,17 +206,65 @@ impl MetricsServer {
         Ok(())
     }
 
+    /// Extract bearer token from HTTP request headers
+    fn extract_bearer_token(request: &str) -> Option<&str> {
+        for line in request.lines() {
+            if let Some(stripped) = line.strip_prefix("Authorization: Bearer ") {
+                return Some(stripped.trim());
+            }
+        }
+        None
+    }
+
     /// Handle incoming HTTP request
     async fn handle_request(
         mut stream: tokio::net::TcpStream,
         registry: Arc<Registry>,
         memory_bytes: Arc<Gauge>,
+        auth_token: Option<String>,
     ) -> anyhow::Result<()> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        let mut buffer = [0; 1024];
+        let mut buffer = [0; 4096];
         let n = stream.read(&mut buffer).await?;
+
+        // Validate request size
+        if n == 0 {
+            let response = "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\n\r\nBad Request";
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+
         let request = String::from_utf8_lossy(&buffer[..n]);
+
+        // Validate HTTP method
+        if !request.starts_with("GET ")
+            && !request.starts_with("POST ")
+            && !request.starts_with("PUT ")
+            && !request.starts_with("DELETE ")
+            && !request.starts_with("HEAD ")
+            && !request.starts_with("OPTIONS ")
+            && !request.starts_with("PATCH ")
+        {
+            let response = "HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\n\r\nBad Request";
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+
+        // Check authentication if token is configured
+        if let Some(ref expected_token) = auth_token {
+            match Self::extract_bearer_token(&request) {
+                Some(provided_token) if provided_token == expected_token => {
+                    // Token matches, proceed
+                }
+                _ => {
+                    let response =
+                        "HTTP/1.1 401 Unauthorized\r\nContent-Length: 12\r\n\r\nUnauthorized";
+                    stream.write_all(response.as_bytes()).await?;
+                    return Ok(());
+                }
+            }
+        }
 
         // Parse HTTP request (simple parser for GET /metrics)
         if request.starts_with("GET /metrics") {
@@ -368,6 +436,41 @@ mod tests {
         // Verify counters can be incremented/decremented without error
         metrics.dec_active_workflows();
         metrics.dec_active_tasks();
+    }
+
+    #[test]
+    fn test_with_token_constructor() {
+        let metrics = MetricsServer::with_token("secret123".to_string());
+        assert_eq!(metrics.metrics_token, Some("secret123".to_string()));
+    }
+
+    #[test]
+    fn test_new_has_no_token() {
+        let metrics = MetricsServer::new();
+        assert_eq!(metrics.metrics_token, None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token() {
+        let request =
+            "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer mytoken123\r\n\r\n";
+        assert_eq!(
+            MetricsServer::extract_bearer_token(request),
+            Some("mytoken123")
+        );
+    }
+
+    #[test]
+    fn test_extract_bearer_token_missing() {
+        let request = "GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        assert_eq!(MetricsServer::extract_bearer_token(request), None);
+    }
+
+    #[test]
+    fn test_extract_bearer_token_wrong_scheme() {
+        let request =
+            "GET /metrics HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic abc123\r\n\r\n";
+        assert_eq!(MetricsServer::extract_bearer_token(request), None);
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
