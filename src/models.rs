@@ -8,6 +8,7 @@ use std::time::Duration;
 // Input validation limits (from ARCHITECTURE.md)
 pub const MAX_YAML_SIZE: usize = 1_048_576; // 1 MB
 pub const MAX_TASK_COUNT: usize = 1_000;
+pub const MAX_RETRY_COUNT: u32 = 100; // Upper bound on per-task retries (prevents overflow/abuse)
 pub const MAX_TASK_NAME_LEN: usize = 64;
 pub const MAX_COMMAND_LEN: usize = 4_096; // 4 KB
 pub const MAX_ARG_COUNT: usize = 256;

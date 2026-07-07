@@ -9,6 +9,73 @@
 **Language:** Rust
 **Target Release:** v0.1.0 (MVP) - Q1 2026
 
+## Architecture Overview
+
+PicoFlow is a single binary (not a workspace). `main.rs` parses CLI args (`clap`), initializes
+`tracing` logging, and dispatches to `cli::Cli::execute()`. Everything else lives under `src/` as a
+flat set of modules re-exported from `lib.rs`. The request flow for a workflow run is:
+
+```
+YAML file → parser → models::WorkflowConfig → dag::DagEngine (validate) → scheduler::TaskScheduler
+          → executors (shell/ssh/http) → state::StateManager (SQLite)
+```
+
+Key modules and how they fit together:
+
+- **`models.rs`** — The shared vocabulary. `WorkflowConfig`/`TaskConfig`/`TaskExecutorConfig` are the
+  serde types parsed from YAML; `TaskStatus` is the task state machine. `TaskExecutorConfig` is an
+  `#[serde(untagged)]` enum, so **variant order matters** (Ssh → Http → Shell, most-specific first) —
+  reordering breaks deserialization. This file also holds all input-validation limits
+  (`MAX_TASK_COUNT`, `MAX_OUTPUT_SIZE`, etc.); enforce new limits here, not ad hoc.
+- **`parser.rs`** — Loads and validates YAML into `WorkflowConfig` before anything else touches it.
+  Size/count/length limits from `models.rs` are checked here.
+- **`dag.rs`** — Wraps `petgraph`. `DagEngine::build()` constructs the dependency graph, rejects
+  missing dependencies and cycles. `topological_sort()` drives sequential runs; `parallel_levels()`
+  groups tasks into concurrency "levels" for parallel runs.
+- **`scheduler.rs`** — `TaskScheduler::execute_workflow()` is the orchestration core. It branches on
+  `max_parallel`: `== 1` → `execute_sequential` (topo order); otherwise `execute_parallel` (level by
+  level, a `tokio::Semaphore` caps concurrency, downstream tasks are skipped when a dependency failed
+  unless `continue_on_failure`). Per-task retry/timeout logic lives in `execute_task_with_retry`
+  (see `retry.rs` for the backoff policy).
+- **`executors/`** — `ExecutorTrait` (async `execute` + `health_check`) with `shell`, `ssh`, `http`
+  implementations. Shared helpers (`redact_headers`, `truncate_output_*`) live in `mod.rs`. Shell
+  uses argv arrays (no shell string interpolation) to prevent command injection; SSH is key-auth only.
+- **`state.rs`** — `StateManager` over `rusqlite` (bundled SQLite). Persists workflow/execution/task
+  records, powers `history`/`stats`/`status`, does crash recovery (`recover_from_crash`) and retention
+  cleanup. DB path comes from the global `--db-path` flag (default `picoflow.db`). Also has
+  `in_memory()` for tests.
+- **`cron_scheduler.rs` + `daemon.rs`** — Daemon mode. `tokio-cron-scheduler` fires workflows on their
+  6-field cron `schedule`; `daemon.rs` manages the PID file (e.g. `/var/run/picoflow.pid`), signal
+  handling, and graceful shutdown.
+- **`metrics.rs` + `logging.rs`** — Observability. Prometheus metrics served on `/metrics` (default
+  port 9090, bound to `127.0.0.1`, optional bearer token); structured JSON logging via `tracing`.
+- **`templates.rs`** — Static workflow-YAML templates backing the `picoflow template` command.
+
+`ARCHITECTURE.md` has the full deep-dive (data flow, retry flow, shutdown, crash recovery, security)
+and is the source of truth when this summary and the code disagree.
+
+## Common Commands
+
+```bash
+cargo build --release              # size-optimized binary → target/release/picoflow
+cargo test --all-features          # unit + integration tests
+cargo test --lib                   # unit tests only
+cargo test --test workflow_integration   # a single integration test file (tests/*.rs)
+cargo test dag::tests::test_name         # a single unit test by path
+cargo bench                        # criterion benchmarks (benches/*.rs)
+cargo clippy --all-targets --all-features -- -D warnings   # lint (CI-blocking, zero warnings)
+cargo fmt --all                    # format (rustfmt.toml: max_width 100)
+cargo run -- validate examples/workflows/simple.yaml       # run the CLI locally
+
+# Cross-compilation aliases (defined in .cargo/config)
+cargo build-arm32                  # Raspberry Pi Zero 2 W / Pi 3/4 32-bit
+cargo build-arm64                  # Pi 4/5, modern SBCs
+cargo build-all                    # all release targets
+```
+
+CLI subcommands: `run`, `validate`, `status`, `workflow list`, `daemon {start,stop,status}`,
+`history`, `stats`, `logs`, `template`. All accept the global `--db-path` flag.
+
 ## Session Initialization
 
 **Run these commands at the start of every session:**
@@ -58,42 +125,13 @@ ssh-add ~/.ssh/id_zoran_private
 
 ## Rust Development Standards
 
-### Core Dependencies (from PRD.md)
-```toml
-# Async runtime
-tokio = { version = "1", features = ["full"] }
-async-trait = "0.1"
+### Core Dependencies
 
-# DAG & scheduling
-petgraph = "0.6"
-tokio-cron-scheduler = "0.9"
-
-# Configuration
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-config = "0.14"
-
-# CLI
-clap = { version = "4", features = ["derive"] }
-
-# Storage
-rusqlite = { version = "0.31", features = ["bundled"] }
-
-# Executors
-ssh2 = "0.9"
-reqwest = { version = "0.11", features = ["json"] }
-
-# Logging & metrics
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json"] }
-prometheus = "0.13"
-
-# Utilities
-uuid = { version = "1", features = ["v4", "serde"] }
-chrono = { version = "0.4", features = ["serde"] }
-anyhow = "1"
-thiserror = "1"
-```
+`Cargo.toml` is the source of truth for exact versions — don't duplicate the list here. The load-bearing
+choices: `tokio` (full) async runtime, `petgraph` for the DAG, `tokio-cron-scheduler` for scheduling,
+`serde`/`serde_yaml` for config, `clap` (derive) for CLI, `rusqlite` (bundled SQLite) for state,
+`ssh2` + `reqwest` for executors, `tracing` + `prometheus` for observability, `openssl` with the
+`vendored` feature (required for cross-compilation). Errors use `anyhow` (app) + `thiserror` (library).
 
 ### Code Quality Standards
 - **Error Handling:** Use `anyhow::Result` for applications, `thiserror` for library errors

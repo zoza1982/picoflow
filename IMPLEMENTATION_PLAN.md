@@ -29,7 +29,7 @@
   - [x] README.md with project overview
   - [x] ARCHITECTURE.md with design details (+ 8 critical fixes)
   - [x] IMPLEMENTATION_PLAN.md (this document)
-  - [x] claude.md (Claude Code configuration)
+  - [x] CLAUDE.md (Claude Code configuration)
 
 - [x] Core data models (`src/models.rs`)
   - [x] `WorkflowConfig` struct with serde derives

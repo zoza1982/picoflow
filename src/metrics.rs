@@ -254,7 +254,7 @@ impl MetricsServer {
         // Check authentication if token is configured
         if let Some(ref expected_token) = auth_token {
             match Self::extract_bearer_token(&request) {
-                Some(provided_token) if provided_token == expected_token => {
+                Some(provided_token) if constant_time_eq(provided_token, expected_token) => {
                     // Token matches, proceed
                 }
                 _ => {
@@ -397,6 +397,25 @@ impl Default for MetricsServer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Compare two byte strings in constant time (independent of the input contents).
+///
+/// Used for the metrics bearer-token check so an attacker cannot recover the token via a
+/// timing side-channel on the byte-by-byte comparison. A length mismatch short-circuits
+/// (token length is not itself secret), otherwise every byte is compared and the results
+/// accumulated so the running time does not reveal the position of the first difference.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 #[cfg(test)]

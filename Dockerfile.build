@@ -1,5 +1,9 @@
-# Multi-stage Dockerfile for cross-compiling PicoFlow
+# Dockerfile for cross-compiling PicoFlow
 # Supports: ARM32, ARM64, x86_64 Linux targets
+#
+# This is a single-stage *builder* image: it is not a runtime image and produces
+# no application layer of its own. It compiles the project against a bind-mounted
+# workspace and drops the resulting binaries back onto the host.
 #
 # Usage:
 #   # Build for all platforms
@@ -11,24 +15,26 @@
 #   docker run --rm -v $(pwd):/workspace picoflow-builder arm64
 #   docker run --rm -v $(pwd):/workspace picoflow-builder x86_64
 
-# Force x86_64 platform for consistent cross-compilation
-# This ensures gcc is x86_64-linux-gnu-gcc (native) which is needed for x86_64 builds
-FROM --platform=linux/amd64 rust:1.83-slim as builder
+# Force x86_64 platform for consistent cross-compilation.
+# This ensures gcc is x86_64-linux-gnu-gcc (native) which is needed for x86_64 builds.
+FROM --platform=linux/amd64 rust:1.83-slim
 
 # Enable multiarch for cross-compilation
 RUN dpkg --add-architecture armhf && \
     dpkg --add-architecture arm64
 
-# Install cross-compilation dependencies
+# Install cross-compilation dependencies.
+# NOTE: OpenSSL is built from source via the `openssl` crate's `vendored` feature
+# (openssl-src), so we deliberately do NOT install libssl-dev / libssl-dev:armhf /
+# libssl-dev:arm64. Vendored builds only need perl + make + a C toolchain, and
+# pulling distro libssl for foreign architectures would conflict with the
+# statically-vendored OpenSSL.
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     crossbuild-essential-armhf \
     crossbuild-essential-arm64 \
     pkg-config \
-    libssl-dev \
-    libssl-dev:armhf \
-    libssl-dev:arm64 \
     perl \
     curl \
     git \
@@ -36,10 +42,8 @@ RUN apt-get update && apt-get install -y \
     bc \
     && rm -rf /var/lib/apt/lists/*
 
-# Set environment variables for cross-compilation
+# Allow cross-arch pkg-config lookups for non-OpenSSL C deps.
 ENV PKG_CONFIG_ALLOW_CROSS=1
-ENV OPENSSL_DIR=/usr
-ENV OPENSSL_STATIC=1
 
 # Install Rust targets
 RUN rustup target add \
@@ -58,5 +62,12 @@ WORKDIR /workspace
 COPY docker-build-entrypoint.sh /build.sh
 RUN chmod +x /build.sh
 
+# This container intentionally runs as root. It is a throwaway build tool (not a
+# long-running service), and it must write compiled artifacts into the
+# bind-mounted host directory (/workspace) with ownership that matches the host
+# invoker's typical root/dev workflow. Introducing a fixed non-root UID here would
+# cause permission errors writing target/ back to the mounted volume across
+# different host UIDs. If reproducible non-root builds are needed later, pass
+# `--user "$(id -u):$(id -g)"` at `docker run` time instead of baking a UID in.
 ENTRYPOINT ["/build.sh"]
 CMD ["all"]
