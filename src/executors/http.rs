@@ -17,7 +17,9 @@
 //!
 //! # Performance
 //!
-//! - Connection pooling via reqwest's built-in client
+//! - A fresh reqwest client is built per request so DNS resolution can be validated for
+//!   each target (see `build_secure_client`); this trades cross-request connection-pool
+//!   reuse for per-request SSRF protection.
 //! - Efficient streaming for large response bodies
 //! - Response truncation for memory safety
 //!
@@ -58,9 +60,6 @@ use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use url::Host;
 
-/// Maximum number of redirects to follow (each hop is re-validated against SSRF rules).
-const MAX_REDIRECTS: usize = 10;
-
 /// HTTP executor for REST API calls
 #[derive(Debug, Clone)]
 pub struct HttpExecutor;
@@ -69,8 +68,9 @@ impl HttpExecutor {
     /// Create a new HTTP executor.
     ///
     /// The executor is stateless: a hardened, SSRF-aware [`reqwest::Client`] is built
-    /// per request (see [`HttpExecutor::build_secure_client`]) so DNS resolution can be
-    /// validated and pinned for each target.
+    /// per request (see [`HttpExecutor::build_secure_client`]) so DNS resolution is
+    /// validated for each target. Note this means requests do not share a connection
+    /// pool across tasks — an accepted trade-off for per-request SSRF validation.
     pub fn new() -> Self {
         Self
     }
@@ -79,32 +79,23 @@ impl HttpExecutor {
     ///
     /// Two protections are applied that a plain shared client cannot provide:
     ///
-    /// 1. **DNS pinning (anti-rebinding).** The target host is resolved once here, every
-    ///    resolved IP is checked against the private/link-local/metadata blocklist, and the
-    ///    client is pinned to exactly those addresses. reqwest therefore connects to an
-    ///    already-validated IP instead of re-resolving (which a malicious resolver could
-    ///    answer differently the second time) — closing the TOCTOU gap.
-    /// 2. **Per-hop redirect validation.** Redirects are followed only if each hop's target
-    ///    passes the same SSRF host checks, so a `302 -> http://169.254.169.254/` (or to a
-    ///    private/loopback literal) cannot escape validation.
+    /// 1. **DNS validation + pinning (anti-rebinding).** For a domain host, the name is
+    ///    resolved once here, every resolved IP is checked against the
+    ///    private/link-local/metadata blocklist, and the client is pinned to exactly those
+    ///    addresses via `resolve_to_addrs`. reqwest then connects to an already-validated
+    ///    IP instead of re-resolving (which a malicious resolver could answer differently
+    ///    the second time), closing the TOCTOU gap. (Literal-IP hosts are validated by
+    ///    the caller's `validate_ssrf`.)
+    /// 2. **Redirects are not followed.** Following a redirect would let a server bounce the
+    ///    request to an unvalidated host (`302 -> http://169.254.169.254/`, or to a domain
+    ///    that resolves to a private IP), so redirect-following is disabled entirely. A 3xx
+    ///    is returned as-is and surfaces as a non-2xx (failed) task rather than being
+    ///    chased to an attacker-chosen target. `allow_private_ips` does not re-enable it.
     async fn build_secure_client(url: &str, allow_private_ips: bool) -> Result<Client> {
-        let redirect_allow_private = allow_private_ips;
-        let policy = reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() >= MAX_REDIRECTS {
-                return attempt.error("too many redirects");
-            }
-            if redirect_allow_private {
-                return attempt.follow();
-            }
-            match Self::validate_ssrf(attempt.url().as_str(), false) {
-                Ok(()) => attempt.follow(),
-                Err(_) => attempt.stop(),
-            }
-        });
-
         let mut builder = Client::builder()
             .user_agent(format!("PicoFlow/{}", env!("CARGO_PKG_VERSION")))
-            .redirect(policy);
+            // Do not chase redirects to unvalidated hosts (SSRF hardening).
+            .redirect(reqwest::redirect::Policy::none());
 
         // Pin the initial host to its validated addresses (only meaningful for domain
         // hosts; literal IPs were already validated by `validate_ssrf`).
@@ -275,7 +266,7 @@ impl HttpExecutor {
     }
 
     /// Resolve a URL's host and validate every resolved IP against the SSRF blocklist,
-    /// returning the validated socket addresses (for DNS pinning).
+    /// returning the validated socket addresses.
     ///
     /// Returns an empty vec when `allow_private_ips` is set or when the host is a literal
     /// IP (already validated by [`HttpExecutor::validate_ssrf`]); callers should not pin in
@@ -395,8 +386,8 @@ impl HttpExecutor {
         // Validate configuration (scheme, literal-host SSRF checks, timeout bounds)
         Self::validate_config(config)?;
 
-        // Build a hardened client for this request: resolves + validates + pins DNS
-        // (anti-rebinding) and re-validates every redirect hop against SSRF rules.
+        // Build a hardened client for this request: resolves + validates + pins the host's
+        // DNS (anti-rebinding), and does not follow redirects to unvalidated hosts.
         let client = Self::build_secure_client(&config.url, config.allow_private_ips).await?;
 
         info!(

@@ -53,9 +53,11 @@ rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 ssh2 = "0.9"
 # rustls-tls (pure-Rust) instead of the default native-tls: avoids a second OpenSSL
 # link (openssl below + ssh2 already vendor it) and simplifies ARM cross-compilation.
+# `-native-roots` loads the OS trust store so internal HTTPS endpoints with a private
+# CA still validate (native-tls did this; plain rustls-tls trusts only Mozilla roots).
 reqwest = { version = "0.11", default-features = false, features = [
     "json",
-    "rustls-tls",
+    "rustls-tls-native-roots",
 ] }
 
 # OpenSSL with vendored feature for cross-compilation support (used by ssh2's libssh2).
