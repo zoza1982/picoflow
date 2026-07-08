@@ -113,9 +113,14 @@ pub fn parse_workflow_yaml(content: &str) -> Result<WorkflowConfig> {
         }
     }
 
-    // Validate task executor config matches task type
+    // Validate task executor config matches type, and enforce shell security
+    // constraints (absolute-path command, arg/workdir limits) statically so `validate`
+    // catches them up front rather than the shell executor failing at run time.
     for task in &config.tasks {
         validate_task_executor_config(task)?;
+        if let TaskExecutorConfig::Shell(shell) = &task.config {
+            validate_shell_config(shell)?;
+        }
     }
 
     // Validate task dependencies exist
@@ -449,6 +454,18 @@ tasks:
             MAX_RETRY_COUNT
         );
         assert!(parse_workflow_yaml(&yaml).is_ok());
+    }
+
+    #[test]
+    fn test_validate_rejects_non_absolute_shell_command() {
+        // `validate`/parse must reject a non-absolute shell command up front, not defer
+        // it to the executor at run time.
+        let yaml = "name: t\ntasks:\n  - name: a\n    type: shell\n    config:\n      command: echo\n      args: [\"hi\"]\n";
+        let result = parse_workflow_yaml(yaml);
+        assert!(
+            matches!(result, Err(PicoFlowError::InvalidPath(_))),
+            "non-absolute shell command should be rejected at parse time, got {result:?}"
+        );
     }
 
     #[test]
