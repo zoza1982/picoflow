@@ -133,6 +133,10 @@ pub fn parse_workflow_yaml(content: &str) -> Result<WorkflowConfig> {
         ));
     }
 
+    // Validate retry counts are within bounds (prevents integer overflow in the
+    // scheduler's `1..=retries + 1` loop and unbounded retry abuse).
+    validate_retry_counts(&config)?;
+
     // Apply global defaults to tasks
     apply_defaults(&mut config);
 
@@ -170,7 +174,7 @@ fn validate_task_name(name: &str) -> Result<()> {
 }
 
 /// Validate that TaskExecutorConfig variant matches the declared task_type
-fn validate_task_executor_config(task: &TaskConfig) -> Result<()> {
+pub(crate) fn validate_task_executor_config(task: &TaskConfig) -> Result<()> {
     let config_matches = matches!(
         (&task.task_type, &task.config),
         (TaskType::Shell, TaskExecutorConfig::Shell(_))
@@ -183,6 +187,32 @@ fn validate_task_executor_config(task: &TaskConfig) -> Result<()> {
             "Task '{}' has type {:?} but config does not match",
             task.name, task.task_type
         )));
+    }
+
+    Ok(())
+}
+
+/// Validate that per-task and default retry counts are within `MAX_RETRY_COUNT`.
+///
+/// Without this bound, `retry: 4294967295` would overflow `retries + 1` in the
+/// scheduler's retry loop (wrapping to an empty range, so the task never runs).
+fn validate_retry_counts(config: &WorkflowConfig) -> Result<()> {
+    if config.config.retry_default > MAX_RETRY_COUNT {
+        return Err(PicoFlowError::Validation(format!(
+            "retry_default {} exceeds maximum of {}",
+            config.config.retry_default, MAX_RETRY_COUNT
+        )));
+    }
+
+    for task in &config.tasks {
+        if let Some(retry) = task.retry {
+            if retry > MAX_RETRY_COUNT {
+                return Err(PicoFlowError::Validation(format!(
+                    "Task '{}' retry {} exceeds maximum of {}",
+                    task.name, retry, MAX_RETRY_COUNT
+                )));
+            }
+        }
     }
 
     Ok(())
@@ -226,9 +256,9 @@ fn apply_defaults(config: &mut WorkflowConfig) {
 /// This function enforces strict security constraints on shell commands to prevent
 /// command injection, path traversal, and resource exhaustion attacks:
 /// - Command must be an absolute path (no relative paths like `echo`)
-/// - Command length must be <= 1024 characters
-/// - Argument count must be <= 100
-/// - Each argument must be <= 4096 characters
+/// - Command length must be <= `MAX_COMMAND_LEN` (4096) characters
+/// - Argument count must be <= `MAX_ARG_COUNT` (256)
+/// - Each argument must be <= `MAX_ARG_LEN` (4096) characters
 /// - Working directory must be absolute with no `..` traversal
 ///
 /// # Arguments
@@ -241,10 +271,10 @@ fn apply_defaults(config: &mut WorkflowConfig) {
 ///
 /// # Errors
 ///
-/// * `PicoFlowError::CommandTooLong` - If command exceeds 1024 characters
+/// * `PicoFlowError::CommandTooLong` - If command exceeds `MAX_COMMAND_LEN` (4096) characters
 /// * `PicoFlowError::InvalidPath` - If command is not an absolute path
-/// * `PicoFlowError::ArgCountExceeded` - If more than 100 arguments
-/// * `PicoFlowError::ArgTooLong` - If any argument exceeds 4096 characters
+/// * `PicoFlowError::ArgCountExceeded` - If more than `MAX_ARG_COUNT` (256) arguments
+/// * `PicoFlowError::ArgTooLong` - If any argument exceeds `MAX_ARG_LEN` (4096) characters
 /// * `PicoFlowError::PathTraversal` - If workdir contains `..`
 ///
 /// # Example
@@ -397,6 +427,36 @@ tasks:
             result,
             Err(PicoFlowError::TaskCountExceeded { .. })
         ));
+    }
+
+    #[test]
+    fn test_retry_count_limit_rejected() {
+        let yaml = format!(
+            "name: test\ntasks:\n  - name: t\n    type: shell\n    retry: {}\n    config:\n      command: /bin/true\n",
+            MAX_RETRY_COUNT + 1
+        );
+        let result = parse_workflow_yaml(&yaml);
+        assert!(
+            matches!(result, Err(PicoFlowError::Validation(_))),
+            "retry above MAX_RETRY_COUNT should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_retry_count_at_limit_accepted() {
+        let yaml = format!(
+            "name: test\ntasks:\n  - name: t\n    type: shell\n    retry: {}\n    config:\n      command: /bin/true\n",
+            MAX_RETRY_COUNT
+        );
+        assert!(parse_workflow_yaml(&yaml).is_ok());
+    }
+
+    #[test]
+    fn test_empty_workflow_parses() {
+        let yaml = "name: empty\ntasks: []\n";
+        let config = parse_workflow_yaml(yaml).unwrap();
+        assert_eq!(config.name, "empty");
+        assert!(config.tasks.is_empty());
     }
 
     #[test]

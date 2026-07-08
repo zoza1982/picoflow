@@ -1,14 +1,13 @@
 //! SQLite-based state management for workflow executions
 
-use crate::error::Result;
+use crate::error::{PicoFlowError, Result};
 use crate::models::{
     TaskExecution, TaskStatus, WorkflowExecution, WorkflowStatistics, WorkflowSummary,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use tracing::debug;
 
 /// State manager for workflow and task execution tracking using SQLite.
@@ -17,10 +16,14 @@ use tracing::debug;
 /// It uses SQLite configured for edge devices (WAL mode, minimal caching) with foreign key
 /// constraints for data integrity.
 ///
-/// # Thread Safety
+/// # Thread Safety & Async
 ///
-/// This type is `Clone` and uses `Arc<Mutex<Connection>>` for safe concurrent access.
-/// All database operations acquire the mutex lock.
+/// This type is `Clone` and holds `Arc<Mutex<Connection>>`. `rusqlite` is a synchronous
+/// (blocking) library, so every database operation is executed on the blocking thread pool
+/// via [`tokio::task::spawn_blocking`] (see [`StateManager::with_conn`]). This keeps the
+/// async runtime's worker threads free — a blocking SQLite `fsync` on an SD card must never
+/// stall the reactor. The mutex is only ever held *inside* the blocking closure, never across
+/// an `.await`, so a `std::sync::Mutex` is the correct choice here.
 ///
 /// # Database Configuration
 ///
@@ -36,12 +39,27 @@ pub struct StateManager {
 }
 
 impl StateManager {
-    /// Helper method to acquire async mutex lock.
+    /// Run a closure with the SQLite connection on the blocking thread pool.
     ///
-    /// Uses tokio::sync::Mutex for async-safe locking that won't cause
-    /// deadlocks when used in async contexts.
-    async fn lock_conn(&self) -> Result<MutexGuard<'_, Connection>> {
-        Ok(self.conn.lock().await)
+    /// The closure receives a `&Connection` and runs entirely on a `spawn_blocking`
+    /// worker, so blocking SQLite calls never occupy an async runtime thread. The mutex
+    /// is locked inside the closure and released before it returns — it is never held
+    /// across an `.await`.
+    async fn with_conn<F, T>(&self, f: F) -> Result<T>
+    where
+        F: FnOnce(&Connection) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || {
+            // Recover from a poisoned mutex instead of panicking: a poisoned lock only
+            // means a previous holder panicked, but the SQLite connection itself is still
+            // usable, and (with panic="abort") panicking here would take down the process.
+            let guard = conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            f(&guard)
+        })
+        .await
+        .map_err(|e| PicoFlowError::Other(format!("state DB task failed to complete: {e}")))?
     }
 
     /// Create a new state manager with file-based SQLite database.
@@ -60,7 +78,7 @@ impl StateManager {
     /// # Errors
     ///
     /// * `PicoFlowError::Io` - If database file cannot be created/opened
-    /// * `PicoFlowError::Sqlite` - If schema initialization fails
+    /// * `PicoFlowError::Database` - If schema initialization fails
     ///
     /// # Example
     ///
@@ -73,151 +91,81 @@ impl StateManager {
     /// # }
     /// ```
     pub async fn new<P: AsRef<Path>>(db_path: P) -> Result<Self> {
-        let db_path = db_path.as_ref();
+        let db_path = db_path.as_ref().to_path_buf();
 
-        // Set restrictive permissions on database file if it doesn't exist yet
-        // This prevents world-readable database files (security issue FS-01)
-        #[cfg(unix)]
-        {
-            use std::fs::OpenOptions;
-            use std::os::unix::fs::OpenOptionsExt;
+        tokio::task::spawn_blocking(move || {
+            // Set restrictive permissions on database file if it doesn't exist yet
+            // This prevents world-readable database files (security issue FS-01)
+            #[cfg(unix)]
+            {
+                use std::fs::OpenOptions;
+                use std::os::unix::fs::OpenOptionsExt;
 
-            // Create database file with mode 0600 (owner read/write only) if it doesn't exist
-            if !db_path.exists() {
-                OpenOptions::new()
-                    .create(true)
-                    .write(true)
-                    .truncate(true)
-                    .mode(0o600) // Owner read/write only
-                    .open(db_path)?;
+                // Create database file with mode 0600 (owner read/write only) if it doesn't exist
+                if !db_path.exists() {
+                    OpenOptions::new()
+                        .create(true)
+                        .write(true)
+                        .truncate(true)
+                        .mode(0o600) // Owner read/write only
+                        .open(&db_path)?;
 
-                debug!(
-                    "Created database file {:?} with permissions 0600 (owner read/write only)",
-                    db_path
-                );
-            } else {
-                // If file exists, update permissions to 0600
-                use std::fs;
-                let metadata = fs::metadata(db_path)?;
-                let mut permissions = metadata.permissions();
-
-                #[cfg(unix)]
-                {
+                    debug!(
+                        "Created database file {:?} with permissions 0600 (owner read/write only)",
+                        db_path
+                    );
+                } else {
+                    // If file exists, update permissions to 0600
+                    use std::fs;
                     use std::os::unix::fs::PermissionsExt;
+                    let metadata = fs::metadata(&db_path)?;
+                    let mut permissions = metadata.permissions();
                     permissions.set_mode(0o600);
-                    fs::set_permissions(db_path, permissions)?;
+                    fs::set_permissions(&db_path, permissions)?;
                     debug!(
                         "Updated database file {:?} permissions to 0600 (owner read/write only)",
                         db_path
                     );
                 }
             }
-        }
 
-        let conn = Connection::open(db_path)?;
+            let conn = Connection::open(&db_path)?;
 
-        // Configure SQLite for edge devices
-        conn.execute_batch(
-            "
-            PRAGMA journal_mode = WAL;
-            PRAGMA synchronous = NORMAL;
-            PRAGMA cache_size = -2000;
-            PRAGMA temp_store = MEMORY;
-            PRAGMA mmap_size = 0;
-            PRAGMA foreign_keys = ON;
-            ",
-        )?;
+            // Configure SQLite for edge devices
+            conn.execute_batch(
+                "
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = NORMAL;
+                PRAGMA cache_size = -2000;
+                PRAGMA temp_store = MEMORY;
+                PRAGMA mmap_size = 0;
+                PRAGMA foreign_keys = ON;
+                ",
+            )?;
 
-        let manager = Self {
-            conn: Arc::new(Mutex::new(conn)),
-        };
+            init_schema(&conn)?;
 
-        manager.init_schema().await?;
-        Ok(manager)
+            Ok(Self {
+                conn: Arc::new(Mutex::new(conn)),
+            })
+        })
+        .await
+        .map_err(|e| PicoFlowError::Other(format!("state DB init failed to complete: {e}")))?
     }
 
     /// Create in-memory database (for testing)
     #[cfg(test)]
     pub async fn in_memory() -> Result<Self> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-
-        let manager = Self {
-            conn: Arc::new(Mutex::new(conn)),
-        };
-
-        manager.init_schema().await?;
-        Ok(manager)
-    }
-
-    /// Initialize database schema
-    async fn init_schema(&self) -> Result<()> {
-        let conn = self.lock_conn().await?;
-
-        conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS workflows (
-                id INTEGER PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                schedule TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS executions (
-                id INTEGER PRIMARY KEY,
-                workflow_id INTEGER NOT NULL,
-                started_at TIMESTAMP NOT NULL,
-                completed_at TIMESTAMP,
-                status TEXT NOT NULL,
-                FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS task_executions (
-                id INTEGER PRIMARY KEY,
-                execution_id INTEGER NOT NULL,
-                task_name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                started_at TIMESTAMP NOT NULL,
-                completed_at TIMESTAMP,
-                exit_code INTEGER,
-                stdout TEXT,
-                stderr TEXT,
-                attempt INTEGER DEFAULT 1,
-                retry_count INTEGER DEFAULT 0,
-                next_retry_at TIMESTAMP,
-                FOREIGN KEY (execution_id) REFERENCES executions(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS retention_policy (
-                workflow_name TEXT PRIMARY KEY,
-                max_executions INTEGER DEFAULT 100,
-                max_age_days INTEGER DEFAULT 30
-            );
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name ON workflows(name);
-            CREATE INDEX IF NOT EXISTS idx_executions_workflow_started ON executions(workflow_id, started_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_task_executions_status ON task_executions(status);
-            CREATE INDEX IF NOT EXISTS idx_task_executions_execution ON task_executions(execution_id);
-            CREATE INDEX IF NOT EXISTS idx_task_executions_started ON task_executions(started_at);
-            ",
-        )?;
-
-        // Migration: Add schedule column if it doesn't exist (for existing databases)
-        let has_schedule_column: bool = conn
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('workflows') WHERE name='schedule'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0)
-            > 0;
-
-        if !has_schedule_column {
-            conn.execute("ALTER TABLE workflows ADD COLUMN schedule TEXT", [])?;
-            debug!("Added schedule column to workflows table");
-        }
-
-        Ok(())
+        tokio::task::spawn_blocking(|| {
+            let conn = Connection::open_in_memory()?;
+            conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+            init_schema(&conn)?;
+            Ok(Self {
+                conn: Arc::new(Mutex::new(conn)),
+            })
+        })
+        .await
+        .map_err(|e| PicoFlowError::Other(format!("state DB init failed to complete: {e}")))?
     }
 
     /// Get or create a workflow by name, returning its database ID.
@@ -235,35 +183,39 @@ impl StateManager {
     ///
     /// # Errors
     ///
-    /// * `PicoFlowError::Sqlite` - If database operation fails
+    /// * `PicoFlowError::Database` - If database operation fails
     pub async fn get_or_create_workflow(&self, name: &str, schedule: Option<&str>) -> Result<i64> {
-        let conn = self.lock_conn().await?;
+        let name = name.to_string();
+        let schedule = schedule.map(|s| s.to_string());
 
-        // Try to get existing workflow
-        let existing: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM workflows WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?;
+        self.with_conn(move |conn| {
+            // Try to get existing workflow
+            let existing: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM workflows WHERE name = ?1",
+                    params![name],
+                    |row| row.get(0),
+                )
+                .optional()?;
 
-        if let Some(id) = existing {
-            // Update schedule if it changed
+            if let Some(id) = existing {
+                // Update schedule if it changed
+                conn.execute(
+                    "UPDATE workflows SET schedule = ?1 WHERE id = ?2",
+                    params![schedule, id],
+                )?;
+                return Ok(id);
+            }
+
+            // Create new workflow
             conn.execute(
-                "UPDATE workflows SET schedule = ?1 WHERE id = ?2",
-                params![schedule, id],
+                "INSERT INTO workflows (name, schedule) VALUES (?1, ?2)",
+                params![name, schedule],
             )?;
-            return Ok(id);
-        }
 
-        // Create new workflow
-        conn.execute(
-            "INSERT INTO workflows (name, schedule) VALUES (?1, ?2)",
-            params![name, schedule],
-        )?;
-
-        Ok(conn.last_insert_rowid())
+            Ok(conn.last_insert_rowid())
+        })
+        .await
     }
 
     /// Start a new workflow execution, creating a database record.
@@ -280,16 +232,17 @@ impl StateManager {
     ///
     /// # Errors
     ///
-    /// * `PicoFlowError::Sqlite` - If database operation fails
+    /// * `PicoFlowError::Database` - If database operation fails
     pub async fn start_execution(&self, workflow_id: i64) -> Result<i64> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO executions (workflow_id, started_at, status) VALUES (?1, ?2, ?3)",
+                params![workflow_id, Utc::now(), TaskStatus::Running.to_string()],
+            )?;
 
-        conn.execute(
-            "INSERT INTO executions (workflow_id, started_at, status) VALUES (?1, ?2, ?3)",
-            params![workflow_id, Utc::now(), TaskStatus::Running.to_string()],
-        )?;
-
-        Ok(conn.last_insert_rowid())
+            Ok(conn.last_insert_rowid())
+        })
+        .await
     }
 
     /// Update workflow execution status and set completion time if terminal.
@@ -303,31 +256,32 @@ impl StateManager {
     ///
     /// # Errors
     ///
-    /// * `PicoFlowError::Sqlite` - If database operation fails
+    /// * `PicoFlowError::Database` - If database operation fails
     pub async fn update_execution_status(
         &self,
         execution_id: i64,
         status: TaskStatus,
     ) -> Result<()> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
+                params![
+                    status.to_string(),
+                    if matches!(
+                        status,
+                        TaskStatus::Success | TaskStatus::Failed | TaskStatus::Timeout
+                    ) {
+                        Some(Utc::now())
+                    } else {
+                        None
+                    },
+                    execution_id
+                ],
+            )?;
 
-        conn.execute(
-            "UPDATE executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
-            params![
-                status.to_string(),
-                if matches!(
-                    status,
-                    TaskStatus::Success | TaskStatus::Failed | TaskStatus::Timeout
-                ) {
-                    Some(Utc::now())
-                } else {
-                    None
-                },
-                execution_id
-            ],
-        )?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Start a task execution within a workflow execution.
@@ -346,27 +300,30 @@ impl StateManager {
     ///
     /// # Errors
     ///
-    /// * `PicoFlowError::Sqlite` - If database operation fails
+    /// * `PicoFlowError::Database` - If database operation fails
     pub async fn start_task(
         &self,
         execution_id: i64,
         task_name: &str,
         attempt: i32,
     ) -> Result<i64> {
-        let conn = self.lock_conn().await?;
+        let task_name = task_name.to_string();
 
-        conn.execute(
-            "INSERT INTO task_executions (execution_id, task_name, status, started_at, attempt) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                execution_id,
-                task_name,
-                TaskStatus::Running.to_string(),
-                Utc::now(),
-                attempt
-            ],
-        )?;
+        self.with_conn(move |conn| {
+            conn.execute(
+                "INSERT INTO task_executions (execution_id, task_name, status, started_at, attempt) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    execution_id,
+                    task_name,
+                    TaskStatus::Running.to_string(),
+                    Utc::now(),
+                    attempt
+                ],
+            )?;
 
-        Ok(conn.last_insert_rowid())
+            Ok(conn.last_insert_rowid())
+        })
+        .await
     }
 
     /// Update task execution status with results.
@@ -384,7 +341,7 @@ impl StateManager {
     ///
     /// # Errors
     ///
-    /// * `PicoFlowError::Sqlite` - If database operation fails
+    /// * `PicoFlowError::Database` - If database operation fails
     pub async fn update_task_status(
         &self,
         task_execution_id: i64,
@@ -393,25 +350,29 @@ impl StateManager {
         stdout: Option<&str>,
         stderr: Option<&str>,
     ) -> Result<()> {
-        let conn = self.lock_conn().await?;
+        let stdout = stdout.map(|s| s.to_string());
+        let stderr = stderr.map(|s| s.to_string());
 
-        conn.execute(
-            "UPDATE task_executions SET status = ?1, completed_at = ?2, exit_code = ?3, stdout = ?4, stderr = ?5 WHERE id = ?6",
-            params![
-                status.to_string(),
-                if matches!(status, TaskStatus::Success | TaskStatus::Failed | TaskStatus::Timeout) {
-                    Some(Utc::now())
-                } else {
-                    None
-                },
-                exit_code,
-                stdout,
-                stderr,
-                task_execution_id
-            ],
-        )?;
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE task_executions SET status = ?1, completed_at = ?2, exit_code = ?3, stdout = ?4, stderr = ?5 WHERE id = ?6",
+                params![
+                    status.to_string(),
+                    if matches!(status, TaskStatus::Success | TaskStatus::Failed | TaskStatus::Timeout) {
+                        Some(Utc::now())
+                    } else {
+                        None
+                    },
+                    exit_code,
+                    stdout,
+                    stderr,
+                    task_execution_id
+                ],
+            )?;
 
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Set task retry information
@@ -421,82 +382,87 @@ impl StateManager {
         retry_count: i32,
         next_retry_at: DateTime<Utc>,
     ) -> Result<()> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            conn.execute(
+                "UPDATE task_executions SET status = ?1, retry_count = ?2, next_retry_at = ?3 WHERE id = ?4",
+                params![
+                    TaskStatus::Retrying.to_string(),
+                    retry_count,
+                    next_retry_at,
+                    task_execution_id
+                ],
+            )?;
 
-        conn.execute(
-            "UPDATE task_executions SET status = ?1, retry_count = ?2, next_retry_at = ?3 WHERE id = ?4",
-            params![
-                TaskStatus::Retrying.to_string(),
-                retry_count,
-                next_retry_at,
-                task_execution_id
-            ],
-        )?;
-
-        Ok(())
+            Ok(())
+        })
+        .await
     }
 
     /// Get execution by ID
     pub async fn get_execution(&self, execution_id: i64) -> Result<Option<WorkflowExecution>> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            let result = conn
+                .query_row(
+                    "SELECT id, workflow_id, started_at, completed_at, status FROM executions WHERE id = ?1",
+                    params![execution_id],
+                    |row| {
+                        Ok(WorkflowExecution {
+                            id: row.get(0)?,
+                            workflow_id: row.get(1)?,
+                            started_at: row.get(2)?,
+                            completed_at: row.get(3)?,
+                            status: parse_task_status(&row.get::<_, String>(4)?),
+                        })
+                    },
+                )
+                .optional()?;
 
-        let result = conn
-            .query_row(
-                "SELECT id, workflow_id, started_at, completed_at, status FROM executions WHERE id = ?1",
-                params![execution_id],
-                |row| {
-                    Ok(WorkflowExecution {
-                        id: row.get(0)?,
-                        workflow_id: row.get(1)?,
-                        started_at: row.get(2)?,
-                        completed_at: row.get(3)?,
-                        status: parse_task_status(&row.get::<_, String>(4)?),
-                    })
-                },
-            )
-            .optional()?;
-
-        Ok(result)
+            Ok(result)
+        })
+        .await
     }
 
     /// Get task executions for a workflow execution
     pub async fn get_task_executions(&self, execution_id: i64) -> Result<Vec<TaskExecution>> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, execution_id, task_name, status, started_at, completed_at, exit_code, stdout, stderr, attempt, retry_count, next_retry_at
+                 FROM task_executions WHERE execution_id = ?1 ORDER BY started_at",
+            )?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, execution_id, task_name, status, started_at, completed_at, exit_code, stdout, stderr, attempt, retry_count, next_retry_at
-             FROM task_executions WHERE execution_id = ?1 ORDER BY started_at",
-        )?;
+            let rows = stmt.query_map(params![execution_id], |row| {
+                Ok(TaskExecution {
+                    id: row.get(0)?,
+                    execution_id: row.get(1)?,
+                    task_name: row.get(2)?,
+                    status: parse_task_status(&row.get::<_, String>(3)?),
+                    started_at: row.get(4)?,
+                    completed_at: row.get(5)?,
+                    exit_code: row.get(6)?,
+                    stdout: row.get(7)?,
+                    stderr: row.get(8)?,
+                    attempt: row.get(9)?,
+                    retry_count: row.get(10)?,
+                    next_retry_at: row.get(11)?,
+                })
+            })?;
 
-        let rows = stmt.query_map(params![execution_id], |row| {
-            Ok(TaskExecution {
-                id: row.get(0)?,
-                execution_id: row.get(1)?,
-                task_name: row.get(2)?,
-                status: parse_task_status(&row.get::<_, String>(3)?),
-                started_at: row.get(4)?,
-                completed_at: row.get(5)?,
-                exit_code: row.get(6)?,
-                stdout: row.get(7)?,
-                stderr: row.get(8)?,
-                attempt: row.get(9)?,
-                retry_count: row.get(10)?,
-                next_retry_at: row.get(11)?,
-            })
-        })?;
+            let mut executions = Vec::new();
+            for row in rows {
+                executions.push(row?);
+            }
 
-        let mut executions = Vec::new();
-        for row in rows {
-            executions.push(row?);
-        }
-
-        Ok(executions)
+            Ok(executions)
+        })
+        .await
     }
 
     /// Recover from process crash by marking incomplete executions as failed.
     ///
     /// Finds all executions with status `Running` (indicating the process crashed
     /// while they were executing) and marks them as `Failed` with current timestamp.
+    /// Any task rows belonging to those executions that were still `Running`/`Retrying`
+    /// are also marked `Failed`, so no orphaned "perpetually running" task rows remain.
     /// This is called on daemon startup for crash recovery.
     ///
     /// # Returns
@@ -505,7 +471,7 @@ impl StateManager {
     ///
     /// # Errors
     ///
-    /// * `PicoFlowError::Sqlite` - If database operation fails
+    /// * `PicoFlowError::Database` - If database operation fails
     ///
     /// # Example
     ///
@@ -519,24 +485,42 @@ impl StateManager {
     /// # }
     /// ```
     pub async fn recover_from_crash(&self) -> Result<Vec<i64>> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            // Find executions that were running when process crashed
+            let crashed_ids: Vec<i64> = {
+                let mut stmt = conn.prepare("SELECT id FROM executions WHERE status = ?1")?;
+                let ids = stmt
+                    .query_map(params![TaskStatus::Running.to_string()], |row| row.get(0))?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                ids
+            };
 
-        // Find executions that were running when process crashed
-        let mut stmt = conn.prepare("SELECT id FROM executions WHERE status = ?1")?;
+            let now = Utc::now();
+            for id in &crashed_ids {
+                // Mark the execution failed
+                conn.execute(
+                    "UPDATE executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
+                    params![TaskStatus::Failed.to_string(), now, id],
+                )?;
 
-        let crashed_ids: Vec<i64> = stmt
-            .query_map(params![TaskStatus::Running.to_string()], |row| row.get(0))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+                // Mark any still-in-flight task rows for this execution failed too,
+                // so they don't linger as "running"/"retrying" forever.
+                conn.execute(
+                    "UPDATE task_executions SET status = ?1, completed_at = ?2 \
+                     WHERE execution_id = ?3 AND status IN (?4, ?5)",
+                    params![
+                        TaskStatus::Failed.to_string(),
+                        now,
+                        id,
+                        TaskStatus::Running.to_string(),
+                        TaskStatus::Retrying.to_string(),
+                    ],
+                )?;
+            }
 
-        // Mark them as failed
-        for id in &crashed_ids {
-            conn.execute(
-                "UPDATE executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
-                params![TaskStatus::Failed.to_string(), Utc::now(), id],
-            )?;
-        }
-
-        Ok(crashed_ids)
+            Ok(crashed_ids)
+        })
+        .await
     }
 
     /// Get execution history for a workflow
@@ -545,33 +529,36 @@ impl StateManager {
         workflow_name: &str,
         limit: usize,
     ) -> Result<Vec<WorkflowExecution>> {
-        let conn = self.lock_conn().await?;
+        let workflow_name = workflow_name.to_string();
 
-        let mut stmt = conn.prepare(
-            "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
-             FROM executions e
-             JOIN workflows w ON e.workflow_id = w.id
-             WHERE w.name = ?1
-             ORDER BY e.started_at DESC
-             LIMIT ?2",
-        )?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
+                 FROM executions e
+                 JOIN workflows w ON e.workflow_id = w.id
+                 WHERE w.name = ?1
+                 ORDER BY e.started_at DESC
+                 LIMIT ?2",
+            )?;
 
-        let rows = stmt.query_map(params![workflow_name, limit], |row| {
-            Ok(WorkflowExecution {
-                id: row.get(0)?,
-                workflow_id: row.get(1)?,
-                started_at: row.get(2)?,
-                completed_at: row.get(3)?,
-                status: parse_task_status(&row.get::<_, String>(4)?),
-            })
-        })?;
+            let rows = stmt.query_map(params![workflow_name, limit as i64], |row| {
+                Ok(WorkflowExecution {
+                    id: row.get(0)?,
+                    workflow_id: row.get(1)?,
+                    started_at: row.get(2)?,
+                    completed_at: row.get(3)?,
+                    status: parse_task_status(&row.get::<_, String>(4)?),
+                })
+            })?;
 
-        let mut executions = Vec::new();
-        for row in rows {
-            executions.push(row?);
-        }
+            let mut executions = Vec::new();
+            for row in rows {
+                executions.push(row?);
+            }
 
-        Ok(executions)
+            Ok(executions)
+        })
+        .await
     }
 
     /// Get execution history filtered by status
@@ -591,57 +578,61 @@ impl StateManager {
         status_filter: Option<&str>,
         limit: usize,
     ) -> Result<Vec<WorkflowExecution>> {
-        let conn = self.lock_conn().await?;
+        let workflow_name = workflow_name.to_string();
+        let status_filter = status_filter.map(|s| s.to_string());
 
-        let (query, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) =
-            if let Some(status) = status_filter {
-                (
-                    "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
-                 FROM executions e
-                 JOIN workflows w ON e.workflow_id = w.id
-                 WHERE w.name = ?1 AND e.status = ?2
-                 ORDER BY e.started_at DESC
-                 LIMIT ?3"
-                        .to_string(),
-                    vec![
-                        Box::new(workflow_name.to_string()),
-                        Box::new(status.to_string()),
-                        Box::new(limit as i64),
-                    ],
-                )
-            } else {
-                (
-                    "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
-                 FROM executions e
-                 JOIN workflows w ON e.workflow_id = w.id
-                 WHERE w.name = ?1
-                 ORDER BY e.started_at DESC
-                 LIMIT ?2"
-                        .to_string(),
-                    vec![Box::new(workflow_name.to_string()), Box::new(limit as i64)],
-                )
-            };
+        self.with_conn(move |conn| {
+            let (query, params_vec): (String, Vec<Box<dyn rusqlite::ToSql>>) =
+                if let Some(status) = status_filter {
+                    (
+                        "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
+                     FROM executions e
+                     JOIN workflows w ON e.workflow_id = w.id
+                     WHERE w.name = ?1 AND e.status = ?2
+                     ORDER BY e.started_at DESC
+                     LIMIT ?3"
+                            .to_string(),
+                        vec![
+                            Box::new(workflow_name),
+                            Box::new(status),
+                            Box::new(limit as i64),
+                        ],
+                    )
+                } else {
+                    (
+                        "SELECT e.id, e.workflow_id, e.started_at, e.completed_at, e.status
+                     FROM executions e
+                     JOIN workflows w ON e.workflow_id = w.id
+                     WHERE w.name = ?1
+                     ORDER BY e.started_at DESC
+                     LIMIT ?2"
+                            .to_string(),
+                        vec![Box::new(workflow_name), Box::new(limit as i64)],
+                    )
+                };
 
-        let mut stmt = conn.prepare(&query)?;
-        let params_refs: Vec<&dyn rusqlite::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
+            let mut stmt = conn.prepare(&query)?;
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
 
-        let rows = stmt.query_map(params_refs.as_slice(), |row| {
-            Ok(WorkflowExecution {
-                id: row.get(0)?,
-                workflow_id: row.get(1)?,
-                started_at: row.get(2)?,
-                completed_at: row.get(3)?,
-                status: parse_task_status(&row.get::<_, String>(4)?),
-            })
-        })?;
+            let rows = stmt.query_map(params_refs.as_slice(), |row| {
+                Ok(WorkflowExecution {
+                    id: row.get(0)?,
+                    workflow_id: row.get(1)?,
+                    started_at: row.get(2)?,
+                    completed_at: row.get(3)?,
+                    status: parse_task_status(&row.get::<_, String>(4)?),
+                })
+            })?;
 
-        let mut executions = Vec::new();
-        for row in rows {
-            executions.push(row?);
-        }
+            let mut executions = Vec::new();
+            for row in rows {
+                executions.push(row?);
+            }
 
-        Ok(executions)
+            Ok(executions)
+        })
+        .await
     }
 
     /// Get workflow execution statistics
@@ -661,62 +652,65 @@ impl StateManager {
     ///
     /// * `Ok(WorkflowStatistics)` - Aggregate statistics for the workflow
     pub async fn get_workflow_statistics(&self, workflow_name: &str) -> Result<WorkflowStatistics> {
-        let conn = self.lock_conn().await?;
+        let workflow_name = workflow_name.to_string();
 
-        let mut stmt = conn.prepare(
-            "SELECT
-                COUNT(*) as total,
-                SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
-                SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
-                AVG(CASE
-                    WHEN e.completed_at IS NOT NULL
-                    THEN (JULIANDAY(e.completed_at) - JULIANDAY(e.started_at)) * 86400
-                    ELSE NULL
-                END) as avg_duration_seconds,
-                SUM(CASE
-                    WHEN e.started_at > datetime('now', '-24 hours')
-                    THEN 1
-                    ELSE 0
-                END) as last_24h_count,
-                MAX(e.started_at) as last_execution
-             FROM executions e
-             JOIN workflows w ON e.workflow_id = w.id
-             WHERE w.name = ?1",
-        )?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
+                    AVG(CASE
+                        WHEN e.completed_at IS NOT NULL
+                        THEN (JULIANDAY(e.completed_at) - JULIANDAY(e.started_at)) * 86400
+                        ELSE NULL
+                    END) as avg_duration_seconds,
+                    SUM(CASE
+                        WHEN e.started_at > datetime('now', '-24 hours')
+                        THEN 1
+                        ELSE 0
+                    END) as last_24h_count,
+                    MAX(e.started_at) as last_execution
+                 FROM executions e
+                 JOIN workflows w ON e.workflow_id = w.id
+                 WHERE w.name = ?1",
+            )?;
 
-        let stats = stmt.query_row(params![workflow_name], |row| {
-            let total: i64 = row.get(0)?;
-            let success_count: i64 = row.get(1)?;
-            let failed_count: i64 = row.get(2)?;
-            let avg_duration_seconds: Option<f64> = row.get(3)?;
-            let last_24h_count: i64 = row.get(4)?;
-            let last_execution: Option<DateTime<Utc>> = row.get(5)?;
+            let stats = stmt.query_row(params![workflow_name], |row| {
+                let total: i64 = row.get(0)?;
+                let success_count: i64 = row.get(1)?;
+                let failed_count: i64 = row.get(2)?;
+                let avg_duration_seconds: Option<f64> = row.get(3)?;
+                let last_24h_count: i64 = row.get(4)?;
+                let last_execution: Option<DateTime<Utc>> = row.get(5)?;
 
-            let success_rate = if total > 0 {
-                (success_count as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
+                let success_rate = if total > 0 {
+                    (success_count as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
 
-            let failure_rate = if total > 0 {
-                (failed_count as f64 / total as f64) * 100.0
-            } else {
-                0.0
-            };
+                let failure_rate = if total > 0 {
+                    (failed_count as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
 
-            Ok(WorkflowStatistics {
-                total_executions: total,
-                success_count,
-                failed_count,
-                success_rate,
-                failure_rate,
-                avg_duration_seconds,
-                last_24h_count,
-                last_execution,
-            })
-        })?;
+                Ok(WorkflowStatistics {
+                    total_executions: total,
+                    success_count,
+                    failed_count,
+                    success_rate,
+                    failure_rate,
+                    avg_duration_seconds,
+                    last_24h_count,
+                    last_execution,
+                })
+            })?;
 
-        Ok(stats)
+            Ok(stats)
+        })
+        .await
     }
 
     /// Delete executions older than retention period
@@ -733,16 +727,17 @@ impl StateManager {
     ///
     /// * `Ok(usize)` - Number of executions deleted
     pub async fn cleanup_old_executions(&self, retention_days: u32) -> Result<usize> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
 
-        let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
+            let deleted = conn.execute(
+                "DELETE FROM executions WHERE completed_at < ?1",
+                params![cutoff],
+            )?;
 
-        let deleted = conn.execute(
-            "DELETE FROM executions WHERE completed_at < ?1",
-            params![cutoff],
-        )?;
-
-        Ok(deleted)
+            Ok(deleted)
+        })
+        .await
     }
 
     /// List all workflows with their execution statistics.
@@ -771,40 +766,109 @@ impl StateManager {
     /// # }
     /// ```
     pub async fn list_workflows(&self) -> Result<Vec<WorkflowSummary>> {
-        let conn = self.lock_conn().await?;
+        self.with_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT
+                    w.name,
+                    w.schedule,
+                    COUNT(e.id) as execution_count,
+                    SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
+                    SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
+                    MAX(e.started_at) as last_execution
+                 FROM workflows w
+                 LEFT JOIN executions e ON w.id = e.workflow_id
+                 GROUP BY w.id, w.name, w.schedule
+                 ORDER BY last_execution DESC NULLS LAST",
+            )?;
 
-        let mut stmt = conn.prepare(
-            "SELECT
-                w.name,
-                w.schedule,
-                COUNT(e.id) as execution_count,
-                SUM(CASE WHEN e.status = 'success' THEN 1 ELSE 0 END) as success_count,
-                SUM(CASE WHEN e.status IN ('failed', 'timeout') THEN 1 ELSE 0 END) as failed_count,
-                MAX(e.started_at) as last_execution
-             FROM workflows w
-             LEFT JOIN executions e ON w.id = e.workflow_id
-             GROUP BY w.id, w.name, w.schedule
-             ORDER BY last_execution DESC NULLS LAST",
-        )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(WorkflowSummary {
+                    name: row.get(0)?,
+                    schedule: row.get(1)?,
+                    execution_count: row.get(2)?,
+                    success_count: row.get(3)?,
+                    failed_count: row.get(4)?,
+                    last_execution: row.get(5)?,
+                })
+            })?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok(WorkflowSummary {
-                name: row.get(0)?,
-                schedule: row.get(1)?,
-                execution_count: row.get(2)?,
-                success_count: row.get(3)?,
-                failed_count: row.get(4)?,
-                last_execution: row.get(5)?,
-            })
-        })?;
+            let mut workflows = Vec::new();
+            for row in rows {
+                workflows.push(row?);
+            }
 
-        let mut workflows = Vec::new();
-        for row in rows {
-            workflows.push(row?);
-        }
-
-        Ok(workflows)
+            Ok(workflows)
+        })
+        .await
     }
+}
+
+/// Initialize database schema (synchronous; run on the connection at construction time).
+fn init_schema(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS workflows (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            schedule TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS executions (
+            id INTEGER PRIMARY KEY,
+            workflow_id INTEGER NOT NULL,
+            started_at TIMESTAMP NOT NULL,
+            completed_at TIMESTAMP,
+            status TEXT NOT NULL,
+            FOREIGN KEY (workflow_id) REFERENCES workflows(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS task_executions (
+            id INTEGER PRIMARY KEY,
+            execution_id INTEGER NOT NULL,
+            task_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            started_at TIMESTAMP NOT NULL,
+            completed_at TIMESTAMP,
+            exit_code INTEGER,
+            stdout TEXT,
+            stderr TEXT,
+            attempt INTEGER DEFAULT 1,
+            retry_count INTEGER DEFAULT 0,
+            next_retry_at TIMESTAMP,
+            FOREIGN KEY (execution_id) REFERENCES executions(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS retention_policy (
+            workflow_name TEXT PRIMARY KEY,
+            max_executions INTEGER DEFAULT 100,
+            max_age_days INTEGER DEFAULT 30
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name ON workflows(name);
+        CREATE INDEX IF NOT EXISTS idx_executions_workflow_started ON executions(workflow_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_task_executions_status ON task_executions(status);
+        CREATE INDEX IF NOT EXISTS idx_task_executions_execution ON task_executions(execution_id);
+        CREATE INDEX IF NOT EXISTS idx_task_executions_started ON task_executions(started_at);
+        ",
+    )?;
+
+    // Migration: Add schedule column if it doesn't exist (for existing databases)
+    let has_schedule_column: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('workflows') WHERE name='schedule'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !has_schedule_column {
+        conn.execute("ALTER TABLE workflows ADD COLUMN schedule TEXT", [])?;
+        debug!("Added schedule column to workflows table");
+    }
+
+    Ok(())
 }
 
 fn parse_task_status(s: &str) -> TaskStatus {
@@ -829,8 +893,11 @@ mod tests {
     #[tokio::test]
     async fn test_create_state_manager() {
         let manager = StateManager::in_memory().await.unwrap();
-        // tokio::sync::Mutex doesn't need is_ok() check, just verify we can lock
-        let _guard = manager.conn.lock().await;
+        // Verify we can acquire the connection lock
+        let _guard = manager
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 
     #[tokio::test]
@@ -950,6 +1017,50 @@ mod tests {
         // Verify exec2 marked as failed
         let execution = manager.get_execution(exec2).await.unwrap().unwrap();
         assert_eq!(execution.status, TaskStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_crash_recovery_cleans_orphaned_task_rows() {
+        let manager = StateManager::in_memory().await.unwrap();
+
+        let workflow_id = manager.get_or_create_workflow("test", None).await.unwrap();
+        let exec = manager.start_execution(workflow_id).await.unwrap();
+
+        // Two tasks left mid-flight when the process "crashed"
+        let running_task = manager.start_task(exec, "running_task", 1).await.unwrap();
+        let retrying_task = manager.start_task(exec, "retrying_task", 1).await.unwrap();
+        manager
+            .set_task_retry(retrying_task, 1, Utc::now() + chrono::Duration::seconds(5))
+            .await
+            .unwrap();
+
+        // A task that already completed should be left untouched
+        let done_task = manager.start_task(exec, "done_task", 1).await.unwrap();
+        manager
+            .update_task_status(done_task, TaskStatus::Success, Some(0), None, None)
+            .await
+            .unwrap();
+
+        let crashed = manager.recover_from_crash().await.unwrap();
+        assert_eq!(crashed, vec![exec]);
+
+        let tasks = manager.get_task_executions(exec).await.unwrap();
+        let status_of = |name: &str| {
+            tasks
+                .iter()
+                .find(|t| t.task_name == name)
+                .map(|t| t.status.clone())
+                .unwrap()
+        };
+        assert_eq!(status_of("running_task"), TaskStatus::Failed);
+        assert_eq!(status_of("retrying_task"), TaskStatus::Failed);
+        assert_eq!(status_of("done_task"), TaskStatus::Success);
+        // The formerly-running rows should now carry a completion timestamp
+        let running_row = tasks
+            .iter()
+            .find(|t| t.id == running_task)
+            .expect("running task row present");
+        assert!(running_row.completed_at.is_some());
     }
 
     #[tokio::test]

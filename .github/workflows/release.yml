@@ -10,6 +10,10 @@ on:
         description: 'Version to release (e.g., v0.1.1)'
         required: true
 
+# Least-privilege default; the create-release job opts into contents: write.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -45,7 +49,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0  # Full history for version info
 
@@ -61,7 +65,7 @@ jobs:
           echo "Building version: ${VERSION}"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@stable # TODO: pin to SHA (rolling branch)
         with:
           targets: ${{ matrix.target }}
 
@@ -72,7 +76,7 @@ jobs:
           sudo apt-get install -y gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu
 
       - name: Cache Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
@@ -80,7 +84,7 @@ jobs:
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache Cargo index
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
@@ -88,7 +92,7 @@ jobs:
             ${{ runner.os }}-cargo-git-
 
       - name: Cache target directory
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: target
           key: ${{ runner.os }}-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
@@ -116,7 +120,8 @@ jobs:
 
           MAX_SIZE=$((10 * 1024 * 1024))  # 10MB
           if [ $BINARY_SIZE -gt $MAX_SIZE ]; then
-            echo "::warning::Binary size ${SIZE_MB}MB exceeds 10MB target"
+            echo "::error::Binary size ${SIZE_MB}MB exceeds 10MB limit"
+            exit 1
           fi
 
       - name: Rename binary
@@ -138,11 +143,12 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: picoflow-${{ matrix.platform }}
           path: artifacts/*
           if-no-files-found: error
+          retention-days: 7
 
   package:
     name: Package Release
@@ -150,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Get version
         id: version
@@ -163,7 +169,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -352,10 +358,11 @@ jobs:
           NOTES
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-packages
           path: release/*
+          retention-days: 7
 
   create-release:
     name: Create GitHub Release
@@ -366,7 +373,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Get version
         id: version
@@ -375,13 +382,13 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-packages
           path: release
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: PicoFlow ${{ steps.version.outputs.version }}
           body_path: release/RELEASE_NOTES.md
@@ -411,27 +418,45 @@ jobs:
 
       - name: Download release checksums
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           BASE_URL="https://github.com/${{ github.repository }}/releases/download/${VERSION}"
+          PLATFORMS="darwin-arm64-macos darwin-x86_64-macos arm64-linux x86_64-linux arm32-linux"
 
-          # Download checksum files for all platforms
-          for platform in darwin-arm64-macos darwin-x86_64-macos arm64-linux x86_64-linux arm32-linux; do
+          # Release assets can lag briefly behind the create-release job finishing,
+          # so retry each checksum download with a bounded wait before giving up.
+          MAX_ATTEMPTS=10
+          SLEEP_SECONDS=15
+
+          for platform in $PLATFORMS; do
             ARCHIVE="picoflow-${VERSION}-${platform}.tar.gz"
-            curl -sL "${BASE_URL}/${ARCHIVE}.sha256" -o "${platform}.sha256" || true
+            attempt=1
+            until curl -fsSL "${BASE_URL}/${ARCHIVE}.sha256" -o "${platform}.sha256"; do
+              if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+                echo "::error::Failed to download checksum for ${platform} after ${MAX_ATTEMPTS} attempts"
+                exit 1
+              fi
+              echo "Checksum for ${platform} not available yet (attempt ${attempt}/${MAX_ATTEMPTS}); retrying in ${SLEEP_SECONDS}s..."
+              attempt=$((attempt + 1))
+              sleep "$SLEEP_SECONDS"
+            done
+            echo "Downloaded checksum for ${platform}"
           done
 
-          # Extract SHA256 hashes
-          for platform in darwin-arm64-macos darwin-x86_64-macos arm64-linux x86_64-linux arm32-linux; do
-            if [ -f "${platform}.sha256" ]; then
-              SHA=$(awk '{print $1}' "${platform}.sha256")
-              ENVNAME=$(echo "$platform" | tr '-' '_' | tr '[:lower:]' '[:upper:]')
-              echo "SHA_${ENVNAME}=${SHA}" >> $GITHUB_ENV
-              echo "SHA for ${platform}: ${SHA}"
+          # Extract SHA256 hashes into the job environment.
+          for platform in $PLATFORMS; do
+            SHA=$(awk '{print $1}' "${platform}.sha256")
+            if [ -z "$SHA" ]; then
+              echo "::error::Empty SHA256 extracted for ${platform}"
+              exit 1
             fi
+            ENVNAME=$(echo "$platform" | tr '-' '_' | tr '[:lower:]' '[:upper:]')
+            echo "SHA_${ENVNAME}=${SHA}" >> $GITHUB_ENV
+            echo "SHA for ${platform}: ${SHA}"
           done
 
       - name: Checkout Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: zoza1982/homebrew-picoflow
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -439,9 +464,21 @@ jobs:
 
       - name: Update formula
         run: |
+          set -euo pipefail
           VERSION="${{ steps.version.outputs.version }}"
           FORMULA_VERSION="${{ steps.version.outputs.formula_version }}"
           REPO="${{ github.repository }}"
+
+          # Guard against the empty `sha256 ""` race: every checksum var must be
+          # populated before we (over)write the formula, otherwise Homebrew users
+          # would get an unverifiable/broken bottle.
+          for var in SHA_DARWIN_ARM64_MACOS SHA_DARWIN_X86_64_MACOS \
+                     SHA_ARM64_LINUX SHA_ARM32_LINUX SHA_X86_64_LINUX; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::Checksum variable ${var} is empty; refusing to write picoflow.rb"
+              exit 1
+            fi
+          done
 
           cat > homebrew-tap/Formula/picoflow.rb <<FORMULA
           class Picoflow < Formula
@@ -513,7 +550,7 @@ jobs:
             runner: macos-15-intel
     steps:
       - name: Download artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: picoflow-${{ matrix.platform }}
           path: artifacts

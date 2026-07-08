@@ -7,6 +7,9 @@ pub mod dag;
 pub mod error;
 pub mod executors;
 pub mod logging;
+/// Prometheus metrics endpoint. Behind the optional `metrics` feature (off by default)
+/// so the edge binary doesn't pay for it unless explicitly enabled.
+#[cfg(feature = "metrics")]
 pub mod metrics;
 pub mod models;
 pub mod parser;

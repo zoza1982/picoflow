@@ -17,7 +17,9 @@
 //!
 //! # Performance
 //!
-//! - Connection pooling via reqwest's built-in client
+//! - A fresh reqwest client is built per request so DNS resolution can be validated for
+//!   each target (see `build_secure_client`); this trades cross-request connection-pool
+//!   reuse for per-request SSRF protection.
 //! - Efficient streaming for large response bodies
 //! - Response truncation for memory safety
 //!
@@ -53,30 +55,68 @@ use crate::models::{
 };
 use async_trait::async_trait;
 use reqwest::{Client, Method};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 use url::Host;
 
 /// HTTP executor for REST API calls
 #[derive(Debug, Clone)]
-pub struct HttpExecutor {
-    /// Reqwest client with connection pooling
-    client: Client,
-}
+pub struct HttpExecutor;
 
 impl HttpExecutor {
-    /// Create a new HTTP executor
+    /// Create a new HTTP executor.
     ///
-    /// Initializes a reqwest client with default configuration.
-    /// Connection pooling is handled automatically by reqwest.
+    /// The executor is stateless: a hardened, SSRF-aware [`reqwest::Client`] is built
+    /// per request (see [`HttpExecutor::build_secure_client`]) so DNS resolution is
+    /// validated for each target. Note this means requests do not share a connection
+    /// pool across tasks — an accepted trade-off for per-request SSRF validation.
     pub fn new() -> Self {
-        let client = Client::builder()
-            .user_agent(format!("PicoFlow/{}", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("Failed to create HTTP client");
+        Self
+    }
 
-        Self { client }
+    /// Build a per-request reqwest client hardened against SSRF.
+    ///
+    /// Two protections are applied that a plain shared client cannot provide:
+    ///
+    /// 1. **DNS validation + pinning (anti-rebinding).** For a domain host, the name is
+    ///    resolved once here, every resolved IP is checked against the
+    ///    private/link-local/metadata blocklist, and the client is pinned to exactly those
+    ///    addresses via `resolve_to_addrs`. reqwest then connects to an already-validated
+    ///    IP instead of re-resolving (which a malicious resolver could answer differently
+    ///    the second time), closing the TOCTOU gap. (Literal-IP hosts are validated by
+    ///    the caller's `validate_ssrf`.)
+    /// 2. **Redirects are not followed.** Following a redirect would let a server bounce the
+    ///    request to an unvalidated host (`302 -> http://169.254.169.254/`, or to a domain
+    ///    that resolves to a private IP), so redirect-following is disabled entirely. A 3xx
+    ///    is returned as-is and surfaces as a non-2xx (failed) task rather than being
+    ///    chased to an attacker-chosen target. `allow_private_ips` does not re-enable it.
+    async fn build_secure_client(url: &str, allow_private_ips: bool) -> Result<Client> {
+        let mut builder = Client::builder()
+            .user_agent(format!("PicoFlow/{}", env!("CARGO_PKG_VERSION")))
+            // Do not chase redirects to unvalidated hosts (SSRF hardening).
+            .redirect(reqwest::redirect::Policy::none());
+
+        // Pin the initial host to its validated addresses (only meaningful for domain
+        // hosts; literal IPs were already validated by `validate_ssrf`).
+        if !allow_private_ips {
+            let parsed = reqwest::Url::parse(url)
+                .map_err(|e| PicoFlowError::Validation(format!("Invalid URL: {}", e)))?;
+            if let Some(Host::Domain(domain)) = parsed.host() {
+                let addrs = Self::resolve_and_validate(url, allow_private_ips).await?;
+                if addrs.is_empty() {
+                    return Err(PicoFlowError::Http(format!(
+                        "No addresses resolved for {}",
+                        domain
+                    )));
+                }
+                builder = builder.resolve_to_addrs(domain, &addrs);
+            }
+        }
+
+        builder
+            .build()
+            .map_err(|e| PicoFlowError::Http(format!("Failed to build HTTP client: {}", e)))
     }
 
     /// Validate URL for SSRF (Server-Side Request Forgery) protection
@@ -225,13 +265,15 @@ impl HttpExecutor {
         Ok(())
     }
 
-    /// Validate that DNS-resolved IPs are not private (prevents DNS rebinding)
+    /// Resolve a URL's host and validate every resolved IP against the SSRF blocklist,
+    /// returning the validated socket addresses.
     ///
-    /// This resolves the hostname and checks all resolved IPs against SSRF rules,
-    /// closing the TOCTOU gap between URL validation and actual request.
-    async fn validate_resolved_ips(url: &str, allow_private_ips: bool) -> Result<()> {
+    /// Returns an empty vec when `allow_private_ips` is set or when the host is a literal
+    /// IP (already validated by [`HttpExecutor::validate_ssrf`]); callers should not pin in
+    /// those cases.
+    async fn resolve_and_validate(url: &str, allow_private_ips: bool) -> Result<Vec<SocketAddr>> {
         if allow_private_ips {
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         let parsed_url = reqwest::Url::parse(url)
@@ -240,24 +282,38 @@ impl HttpExecutor {
         // Only resolve for domain hosts (IP addresses were already validated)
         let host = match parsed_url.host() {
             Some(Host::Domain(domain)) => domain.to_string(),
-            _ => return Ok(()), // IPs already validated in validate_ssrf
+            _ => return Ok(Vec::new()), // IPs already validated in validate_ssrf
         };
 
-        let port = parsed_url.port_or_known_default().unwrap_or(80);
-        let addr = format!("{}:{}", host, port);
+        let port = parsed_url.port_or_known_default().unwrap_or(443);
 
-        let resolved = tokio::net::lookup_host(&addr).await.map_err(|e| {
-            PicoFlowError::Http(format!("DNS resolution failed for {}: {}", host, e))
-        })?;
+        let resolved = tokio::net::lookup_host((host.as_str(), port))
+            .await
+            .map_err(|e| {
+                PicoFlowError::Http(format!("DNS resolution failed for {}: {}", host, e))
+            })?;
 
+        let mut validated = Vec::new();
         for socket_addr in resolved {
             match socket_addr.ip() {
                 std::net::IpAddr::V4(ip) => Self::validate_ipv4_not_private(ip)?,
                 std::net::IpAddr::V6(ip) => Self::validate_ipv6_not_private(ip)?,
             }
+            validated.push(socket_addr);
         }
 
-        Ok(())
+        Ok(validated)
+    }
+
+    /// Validate that DNS-resolved IPs are not private (prevents DNS rebinding).
+    ///
+    /// Thin wrapper over [`HttpExecutor::resolve_and_validate`] that discards the addresses.
+    /// Retained for unit tests; production code uses `resolve_and_validate` for pinning.
+    #[cfg(test)]
+    async fn validate_resolved_ips(url: &str, allow_private_ips: bool) -> Result<()> {
+        Self::resolve_and_validate(url, allow_private_ips)
+            .await
+            .map(|_| ())
     }
 
     /// Validate HTTP configuration
@@ -327,11 +383,12 @@ impl HttpExecutor {
         config: &HttpConfig,
         timeout_secs: u64,
     ) -> Result<ExecutionResult> {
-        // Validate configuration
+        // Validate configuration (scheme, literal-host SSRF checks, timeout bounds)
         Self::validate_config(config)?;
 
-        // DNS rebinding protection: resolve and validate IPs
-        Self::validate_resolved_ips(&config.url, config.allow_private_ips).await?;
+        // Build a hardened client for this request: resolves + validates + pins the host's
+        // DNS (anti-rebinding), and does not follow redirects to unvalidated hosts.
+        let client = Self::build_secure_client(&config.url, config.allow_private_ips).await?;
 
         info!(
             "Executing HTTP {} request to {}",
@@ -347,8 +404,7 @@ impl HttpExecutor {
 
         // Build request
         let method = Self::convert_method(&config.method);
-        let mut request = self
-            .client
+        let mut request = client
             .request(method, &config.url)
             .timeout(Duration::from_secs(timeout_secs));
 
@@ -704,15 +760,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_executor_new() {
+        // The executor is a stateless (zero-sized) type; just verify it constructs and
+        // clones without panicking (no reqwest client is built until a request runs).
         let executor = HttpExecutor::new();
-        // Just verify it constructs successfully
-        assert!(std::mem::size_of_val(&executor) > 0);
+        let _clone = executor.clone();
     }
 
     #[tokio::test]
+    #[allow(clippy::default_constructed_unit_structs)]
     async fn test_http_executor_default() {
-        let executor = HttpExecutor::default();
-        assert!(std::mem::size_of_val(&executor) > 0);
+        // Exercise the Default impl explicitly (the type is now unit-like).
+        let _executor = HttpExecutor::default();
+    }
+
+    #[tokio::test]
+    async fn test_build_secure_client_public_ip_literal() {
+        // A public IP literal needs no DNS resolution (no network), and should build a
+        // client successfully with the SSRF-validating redirect policy attached.
+        let client = HttpExecutor::build_secure_client("https://1.1.1.1/", false).await;
+        assert!(client.is_ok(), "expected a secure client for a public IP");
+    }
+
+    #[tokio::test]
+    async fn test_build_secure_client_blocks_private_ip_literal() {
+        // A private IP literal is rejected up front by validate_ssrf via the caller;
+        // build_secure_client itself skips pinning for IP literals, so verify the literal
+        // check is what guards this path.
+        let result = HttpExecutor::validate_ssrf("http://169.254.169.254/latest/meta-data", false);
+        assert!(result.is_err(), "cloud metadata IP must be blocked");
     }
 
     #[tokio::test]

@@ -8,10 +8,28 @@ license = "MIT"
 repository = "https://github.com/zoza1982/picoflow"
 keywords = ["workflow", "dag", "scheduler", "edge", "orchestrator"]
 categories = ["command-line-utilities", "development-tools"]
+# Minimum supported Rust version — kept in sync with Dockerfile.build's toolchain.
+rust-version = "1.83"
+
+[features]
+default = []
+# Optional Prometheus /metrics HTTP endpoint. Off by default to keep the edge binary
+# small; enable with `--features metrics`.
+metrics = ["dep:prometheus"]
 
 [dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime. Explicit feature list (not "full") to avoid pulling in unused
+# subsystems (fs, io-std, ...) on a size-constrained edge target.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "time",
+    "sync",
+    "signal",
+    "net",
+    "io-util",
+] }
 async-trait = "0.1"
 futures = "0.3"
 
@@ -33,15 +51,22 @@ rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 
 # Executors
 ssh2 = "0.9"
-reqwest = { version = "0.11", features = ["json"] }
+# rustls-tls (pure-Rust) instead of the default native-tls: avoids a second OpenSSL
+# link (openssl below + ssh2 already vendor it) and simplifies ARM cross-compilation.
+# `-native-roots` loads the OS trust store so internal HTTPS endpoints with a private
+# CA still validate (native-tls did this; plain rustls-tls trusts only Mozilla roots).
+reqwest = { version = "0.11", default-features = false, features = [
+    "json",
+    "rustls-tls-native-roots",
+] }
 
-# OpenSSL with vendored feature for cross-compilation support
+# OpenSSL with vendored feature for cross-compilation support (used by ssh2's libssh2).
 openssl = { version = "0.10", features = ["vendored"] }
 
 # Logging & metrics
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json"] }
-prometheus = "0.14"
+prometheus = { version = "0.14", optional = true }
 
 # Utilities
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -77,9 +102,23 @@ harness = false
 name = "workflow_benchmark"
 harness = false
 
+# NOTE: cargo only reads [profile.*] from Cargo.toml (NOT from .cargo/config.toml),
+# so these are the profiles that actually take effect.
 [profile.release]
 opt-level = "z"     # Optimize for size
 lto = true          # Enable link-time optimization
 codegen-units = 1   # Maximize optimizations
 strip = true        # Strip symbols for smaller binary
 panic = "abort"     # Reduce binary size further
+
+# Size-analysis profile (same as release; kept explicit for `--profile release-size`).
+[profile.release-size]
+inherits = "release"
+
+# Performance-profiling profile: optimize for speed and keep debug symbols.
+[profile.release-perf]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+strip = false
+debug = true

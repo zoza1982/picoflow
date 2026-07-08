@@ -252,10 +252,26 @@ impl DagEngine {
         let node_count = self.graph.node_count();
         let mut node_levels: HashMap<NodeIndex, usize> = HashMap::with_capacity(node_count);
 
-        // Calculate level for each node
-        for node in self.graph.node_indices() {
-            let level = self.calculate_node_level(node, &mut node_levels);
-            node_levels.insert(node, level);
+        // Compute each node's level as the longest path from any root, iteratively via a
+        // topological order. This avoids recursion (which, on a ~1000-node linear chain,
+        // risked a stack overflow) — parents are always processed before children, so a
+        // node's level is simply max(parent level) + 1.
+        //
+        // The graph is validated acyclic in `build`, so `toposort` cannot fail; if it
+        // somehow did we fall back to node-index order rather than panicking.
+        let order =
+            toposort(&self.graph, None).unwrap_or_else(|_| self.graph.node_indices().collect());
+
+        for node in order {
+            let mut max_dep_level = 0;
+            for parent in self
+                .graph
+                .neighbors_directed(node, petgraph::Direction::Incoming)
+            {
+                let parent_level = node_levels.get(&parent).copied().unwrap_or(0);
+                max_dep_level = max_dep_level.max(parent_level + 1);
+            }
+            node_levels.insert(node, max_dep_level);
         }
 
         // Group nodes by level
@@ -272,28 +288,6 @@ impl DagEngine {
         }
 
         levels
-    }
-
-    fn calculate_node_level(
-        &self,
-        node: NodeIndex,
-        cache: &mut HashMap<NodeIndex, usize>,
-    ) -> usize {
-        if let Some(&level) = cache.get(&node) {
-            return level;
-        }
-
-        let mut max_dep_level = 0;
-        for parent in self
-            .graph
-            .neighbors_directed(node, petgraph::Direction::Incoming)
-        {
-            let parent_level = self.calculate_node_level(parent, cache);
-            max_dep_level = max_dep_level.max(parent_level + 1);
-        }
-
-        cache.insert(node, max_dep_level);
-        max_dep_level
     }
 
     /// Get all tasks that directly depend on the given task.
