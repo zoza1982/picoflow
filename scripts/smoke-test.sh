@@ -155,6 +155,42 @@ stdout_has "seq execution recorded as success" "success"
 section "run — parallel (diamond)"
 expect_ok "run parallel workflow succeeds" run "$WF/parallel.yaml"
 
+# ── run: complex multi-node DAG ──────────────────────────────────────────────
+# 9 nodes / 4 levels: two roots (A,B), a disconnected node (ISO), multiple-parent
+# joins (Dd<-A,B), two diamonds, and a final join (H<-F,G). Each dependent task
+# asserts ALL of its parents' marker files exist before creating its own — so any
+# out-of-order scheduling makes that task fail and the run exits non-zero. Verified
+# in both parallel and sequential execution modes.
+section "run — complex multi-node DAG (9 nodes, 4 levels)"
+MK="$WORK/mk"
+write_multidag() { # $1 = max_parallel
+  cat > "$WF/multidag.yaml" <<Y
+name: multidag
+config: { max_parallel: $1 }
+tasks:
+  - { name: A,   type: shell, config: { command: "/bin/sh", args: ["-c", "touch $MK/A"] } }
+  - { name: B,   type: shell, config: { command: "/bin/sh", args: ["-c", "touch $MK/B"] } }
+  - { name: ISO, type: shell, config: { command: "/bin/sh", args: ["-c", "touch $MK/ISO"] } }
+  - { name: C,   type: shell, depends_on: [A],     config: { command: "/bin/sh", args: ["-c", "test -f $MK/A && touch $MK/C"] } }
+  - { name: Dd,  type: shell, depends_on: [A, B],  config: { command: "/bin/sh", args: ["-c", "test -f $MK/A && test -f $MK/B && touch $MK/Dd"] } }
+  - { name: E,   type: shell, depends_on: [B],     config: { command: "/bin/sh", args: ["-c", "test -f $MK/B && touch $MK/E"] } }
+  - { name: F,   type: shell, depends_on: [C, Dd], config: { command: "/bin/sh", args: ["-c", "test -f $MK/C && test -f $MK/Dd && touch $MK/F"] } }
+  - { name: G,   type: shell, depends_on: [Dd, E], config: { command: "/bin/sh", args: ["-c", "test -f $MK/Dd && test -f $MK/E && touch $MK/G"] } }
+  - { name: H,   type: shell, depends_on: [F, G],  config: { command: "/bin/sh", args: ["-c", "test -f $MK/F && test -f $MK/G && touch $MK/H"] } }
+Y
+}
+write_multidag 3
+expect_ok "validate 9-node DAG" validate "$WF/multidag.yaml"
+stdout_has "validate reports 9 tasks" "Tasks: 9"
+for mode in "3:parallel" "1:sequential"; do
+  mp="${mode%%:*}"; label="${mode##*:}"
+  rm -rf "$MK"; mkdir -p "$MK"; write_multidag "$mp"
+  if pf run "$WF/multidag.yaml"; then pass "run 9-node DAG ($label) succeeds"; else fail "run 9-node DAG ($label) failed"; fi
+  n=$(find "$MK" -type f | wc -l | tr -d ' ')
+  [[ "$n" -eq 9 ]] && pass "all 9 nodes executed in dependency order ($label)" \
+                   || fail "$n/9 nodes ran ($label) — ordering violated"
+done
+
 # ── run: failure + retry ─────────────────────────────────────────────────────
 section "run — failure + retry"
 expect_fail "run failing workflow exits non-zero" run "$WF/fail-retry.yaml"
