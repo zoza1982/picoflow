@@ -5,15 +5,15 @@ Set Width 1400
 Set Height 900
 Set Padding 22
 Set Theme "Catppuccin Mocha"
-Set TypingSpeed 42ms
+Set TypingSpeed 78ms
 Hide
 Type `export PS1="picoflow ❯ "; export PATH="$PWD/bin:$PATH"; rm -f picoflow.db; picoflow run pipeline.yaml >/dev/null 2>&1; clear`
 Enter
 Show
-Sleep 500ms
+Sleep 1s
 Type "picoflow --log-level error stats data-pipeline"
 Enter
-Sleep 3s
+Sleep 4s
 Type "picoflow --log-level error status data-pipeline --limit 1"
 Enter
-Sleep 4s
+Sleep 2s

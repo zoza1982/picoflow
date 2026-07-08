@@ -15,17 +15,17 @@ All three drive [`pipeline.yaml`](pipeline.yaml), a small ETL-style DAG
 
 ## Regenerate
 
-Install VHS and its dependencies (`ttyd`, `ffmpeg`), then build picoflow and render:
+Install VHS and its dependencies (`ttyd`, `ffmpeg`), then build picoflow and run the
+render script:
 
 ```bash
-# deps (Debian/Ubuntu): apt-get install ffmpeg ttyd; install VHS from its releases
+# deps (Debian/Ubuntu): apt-get install ffmpeg ttyd gifsicle; install VHS from its releases
 cargo build --release
-mkdir -p bin && cp target/release/picoflow bin/     # the tapes expect ./bin/picoflow on PATH
-cd docs/demos
-vhs 01-quickstart.tape
-vhs 02-run.tape
-vhs 03-inspect.tape
+docs/demos/render.sh
 ```
 
-Each tape sets `PATH="$PWD/bin:$PATH"` in a hidden setup step, so it records the local
-binary. Adjust `Set Theme`, `Set FontSize`, or `Set Width/Height` in a tape to restyle.
+`render.sh` stages the freshly built binary at `docs/demos/bin/picoflow` (the tapes put it
+on `PATH` via a hidden setup step), renders each tape with VHS, then uses `ffmpeg`'s `tpad`
+filter to **freeze the final frame for a few seconds** — VHS trims trailing idle frames, so
+the closing "digest" pause is added in post. Adjust the `HOLD` values in `render.sh`, or
+`Set TypingSpeed` / `Sleep` in a tape, to retune pacing.
