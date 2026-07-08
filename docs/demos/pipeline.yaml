@@ -1,0 +1,24 @@
+name: data-pipeline
+description: Nightly ETL — fetch, transform in parallel, then load
+config:
+  max_parallel: 3
+tasks:
+  - name: fetch
+    type: shell
+    config: { command: "/bin/echo", args: ["fetched 1,024 rows"] }
+  - name: clean
+    type: shell
+    depends_on: [fetch]
+    config: { command: "/bin/echo", args: ["cleaned"] }
+  - name: enrich
+    type: shell
+    depends_on: [fetch]
+    config: { command: "/bin/echo", args: ["enriched"] }
+  - name: validate_data
+    type: shell
+    depends_on: [fetch]
+    config: { command: "/bin/echo", args: ["validated"] }
+  - name: load
+    type: shell
+    depends_on: [clean, enrich, validate_data]
+    config: { command: "/bin/echo", args: ["loaded to warehouse"] }

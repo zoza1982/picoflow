@@ -29,6 +29,22 @@ PicoFlow is a Rust-native workflow orchestrator designed specifically for resour
 - **Observability**: Structured logging (JSON), Prometheus metrics
 - **Edge-Ready**: Tested on Raspberry Pi Zero 2 W (512MB RAM)
 
+## See It In Action
+
+**1. Author & validate a DAG** — describe your workflow in YAML; `validate` checks the graph and prints the execution order.
+
+![Author and validate a workflow](docs/demos/01-quickstart.gif)
+
+**2. Run it** — tasks execute level by level, fanning out in parallel up to `max_parallel` (`fetch` → `clean`/`enrich`/`validate_data` in parallel → `load`).
+
+![Run a parallel DAG](docs/demos/02-run.gif)
+
+**3. Observe** — every run is persisted to SQLite; inspect `stats`, `status`, `history`, and per-task `logs`.
+
+![Inspect stats and status](docs/demos/03-inspect.gif)
+
+> The demos above are generated with [VHS](https://github.com/charmbracelet/vhs) from the tapes in [`docs/demos/`](docs/demos/) — run `vhs docs/demos/02-run.tape` to reproduce one.
+
 ## Quick Start
 
 ### Installation
