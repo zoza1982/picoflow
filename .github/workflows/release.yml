@@ -459,7 +459,9 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: zoza1982/homebrew-picoflow
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          # Write-scoped deploy key (never expires, limited to just the tap repo).
+          # Replaces the previous PAT, which silently expired and broke releases.
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: homebrew-tap
 
       - name: Update formula
@@ -484,7 +486,6 @@ jobs:
           class Picoflow < Formula
             desc "Lightweight DAG workflow orchestrator for edge devices"
             homepage "https://github.com/${REPO}"
-            version "${FORMULA_VERSION}"
             license "MIT"
 
             on_macos do
