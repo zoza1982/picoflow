@@ -363,40 +363,37 @@ cargo audit
 
 ## Roadmap
 
-**Current Release: v0.1.0 (Phase 1 - MVP)**
+**Current release: v0.1.1** — Phases 0–4 are complete. PicoFlow runs DAG workflows with
+shell / SSH / HTTP executors, sequential and parallel execution, cron scheduling in a
+daemon, retries with exponential backoff, and SQLite-backed history/stats/logs.
 
-- [x] **Phase 0**: Foundation - ✅ Complete
-  - Project setup and core architecture
-  - CI/CD pipeline
-  - Basic data models
-- [x] **Phase 1**: MVP Core Engine (v0.1.0) - ✅ Complete
-  - Sequential workflow execution
-  - DAG engine with cycle detection
-  - Shell executor
-  - SQLite state management
-  - CLI: run, validate, status
-- [ ] **Phase 2**: Scheduling & SSH (v0.2.0) - Planned
-  - Cron-based scheduling (6-field format)
-  - SSH remote execution (key-based auth)
-  - Daemon mode with signal handling
-  - Retry logic with exponential backoff
-  - Graceful shutdown
-- [ ] **Phase 3**: Parallelism & Observability (v0.3.0) - Planned
-  - Parallel task execution
-  - Prometheus metrics endpoint
-  - Execution history queries
-  - Enhanced CLI: history, stats, logs
-- [ ] **Phase 4**: Polish & Documentation (v0.1.1) - Planned
-  - HTTP executor
-  - Comprehensive documentation
-  - Production-ready release
+- [x] **Phase 0 — Foundation**: project setup, CI/CD pipeline, core data models
+- [x] **Phase 1 — MVP core engine**: DAG engine with cycle detection, shell executor,
+  sequential execution, SQLite state, CLI (`run`, `validate`, `status`)
+- [x] **Phase 2 — Scheduling & SSH**: 6-field cron scheduling, daemon mode with signal
+  handling and graceful shutdown, SSH executor (key-based auth), retry with exponential
+  backoff
+- [x] **Phase 3 — Parallelism & observability**: parallel execution by DAG level (bounded
+  by `max_parallel`), execution history queries, `history` / `stats` / `logs` CLI
+- [x] **Phase 4 — Executors & polish**: HTTP executor (with SSRF hardening), comprehensive
+  documentation, cross-compiled release binaries + Homebrew tap
 
-**Future Versions:**
-- **v1.1** (Q2 2026): Docker executor, Web UI, REST API
-- **v1.2** (Q3 2026): Conditional execution, loops, templating
-- **v2.0** (Q4 2026): Distributed multi-node execution
+**In progress / next:**
 
-See [PRD.md](PRD.md) for detailed roadmap and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for technical milestones.
+- [ ] **Prometheus metrics endpoint** — implemented as a library module (build with
+  `--features metrics`) but not yet exposed on the CLI; the remaining work is a
+  `--metrics-port` flag plus recording task executions from the scheduler
+- [ ] Workflow parameterization — env-var / file secret references resolved at runtime
+
+**Future versions:**
+
+- **v0.2** — Docker executor, richer scheduling controls
+- **v1.0** — Web UI and REST API
+- **v1.x** — conditional execution, loops, templating
+- **v2.0** — distributed multi-node execution
+
+See [PRD.md](PRD.md) and [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for detailed
+milestones.
 
 ## Contributing
 
