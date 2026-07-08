@@ -119,3 +119,17 @@ jobs:
         with:
           files: ./cobertura.xml
           fail_ci_if_error: false
+
+  smoke:
+    name: Smoke Test (CLI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@stable # TODO: pin to SHA (rolling branch)
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      # Debug build is enough to exercise CLI behaviour and is much faster than the
+      # LTO release build; the smoke script drives this binary end-to-end.
+      - name: Build debug binary
+        run: cargo build --locked
+      - name: Run CLI smoke test
+        run: SKIP_BUILD=1 PICOFLOW_BIN=target/debug/picoflow ./scripts/smoke-test.sh

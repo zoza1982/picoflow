@@ -79,7 +79,9 @@ pub enum Commands {
         status: Option<String>,
 
         /// Number of records to show
-        #[arg(short, long, default_value = "10")]
+        // `--limit` is long-only: the short `-l` collides with the global `--log-level`
+        // (clap only catches this in debug builds; release would ship an ambiguous flag).
+        #[arg(long, default_value = "10")]
         limit: usize,
     },
 
@@ -742,6 +744,15 @@ fn format_duration(seconds: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_definition_is_valid() {
+        // Validates the entire command/argument tree (e.g. no duplicate short flags like
+        // `-l` shared by --limit and the global --log-level). clap only runs these checks
+        // in debug builds, so asserting it here catches the problem in `cargo test`.
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
+    }
 
     #[test]
     fn test_cli_parse() {
