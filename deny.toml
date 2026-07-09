@@ -41,6 +41,9 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Unlicense",
+    # Zlib: permissive, OSI-approved, no copyleft obligations.
+    # Pulled in transitively by foldhash (hashbrown -> hashlink -> rusqlite).
+    "Zlib",
 ]
 confidence-threshold = 0.8
 # Per-crate license exceptions would go here if a crate needed a license
