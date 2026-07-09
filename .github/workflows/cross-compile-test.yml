@@ -9,6 +9,9 @@ on:
       - '.cargo/**'
       - 'scripts/**'
       - 'Dockerfile.build'
+      # Re-run when this workflow's own definition changes (e.g. an action bump),
+      # otherwise those changes ship without ever being exercised.
+      - '.github/workflows/cross-compile-test.yml'
   push:
     branches:
       - main
@@ -19,6 +22,7 @@ on:
       - '.cargo/**'
       - 'scripts/**'
       - 'Dockerfile.build'
+      - '.github/workflows/cross-compile-test.yml'
   workflow_dispatch:
 
 # Least-privilege by default.
