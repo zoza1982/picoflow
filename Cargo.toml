@@ -57,7 +57,7 @@ ssh2 = "0.9"
 # (RUSTSEC-2026-0098/0099/0104) fixable only by migrating to reqwest 0.12. native-tls
 # uses OpenSSL — already vendored below for ssh2, so no extra build cost — and validates
 # against the OS trust store.
-reqwest = { version = "0.11", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 
 # OpenSSL with vendored feature for cross-compilation support (used by ssh2 + reqwest).
 openssl = { version = "0.10", features = ["vendored"] }
