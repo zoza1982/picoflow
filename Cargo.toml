@@ -78,7 +78,7 @@ url = "2.5.7"
 [dev-dependencies]
 tempfile = "3"
 mockall = "0.15"
-criterion = "0.5"
+criterion = "0.8"
 wiremock = "0.6"
 
 [[bench]]
